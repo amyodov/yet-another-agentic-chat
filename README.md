@@ -263,6 +263,42 @@ tail -f "${XDG_RUNTIME_DIR:-/tmp}/yaac/inbox/"*.jsonl
 A file appears there only while a connection is open, and is deleted on
 `disconnect`, so an empty directory means nothing is on air.
 
+### Message format
+
+Each line of an inbox file is one complete JSON object, newline-terminated —
+**always exactly one line per message**, whatever the body contains. JSON escapes
+control characters, so a body with newlines in it still occupies a single physical
+line. `jq` and `wc -l` both do the obvious thing.
+
+```json
+{"id":"01JZ...","channel":"z combinator forum","from":"Диман","to":"Колян","ts":"2026-07-29T14:32:05Z","body":"schema changed:\n  - field renamed to recipient_group"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | ULID. Time-sortable, so lines sort chronologically. |
+| `channel` | Channel the message travelled on. |
+| `from` | Sender's nickname. Filled in by the relaying session, never by the sender. |
+| `to` | Recipient's nickname, or `null` if it was a broadcast. |
+| `ts` | UTC, second resolution. |
+| `body` | Whatever was sent, verbatim. Never parsed by YAAC. |
+
+Failures arrive in the same file and are distinguished by `"from": null` and a
+`kind`, rather than by any reserved nickname — every nickname is available to
+users, so none can be reserved for the protocol:
+
+```json
+{"from":null,"kind":"bounce","id":"01JZ...","reason":"no such nickname on this channel"}
+```
+
+Writers append whole lines, but a reader can still arrive mid-flush. Consume only
+up to the last newline and leave the remainder for next time; that is what
+`check_inbox` does.
+
+On the wire it is not line-based at all — ZMQ frames carry explicit lengths, so a
+message is `[destination JSON][body]` going out and `[envelope JSON]` coming back,
+with no delimiter and no escaping.
+
 ## Licence
 
 MIT.
