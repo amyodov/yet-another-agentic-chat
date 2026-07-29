@@ -115,7 +115,7 @@ async def join_channel(
     """Go on air: join CHANNEL as NICKNAME. If nobody is on it, joining is what brings the channel into being.
 
     Ask the user to confirm both the channel and the nickname before calling this. Never invent a nickname or infer
-    one from the directory, hostname, or task. Adds send, check_inbox, peers, connections and leave_channel.
+    one from the directory, hostname, or task. Adds send, check_inbox, peers and leave_channel.
     """
     try:
         result = await radio().connect(channel, nickname)
@@ -140,7 +140,7 @@ async def join_channel(
         # Published by notification, so the client may need a moment to re-fetch tools/list. Saying they exist
         # outright invites a call that fails while the list is still the old one.
         "new_tools": (
-            "send, check_inbox, peers, connections and leave_channel are being published now. If they are not "
+            "send, check_inbox, peers and leave_channel are being published now. If they are not "
             "listed yet, look again before assuming they are missing."
         ),
     }
@@ -229,12 +229,6 @@ async def peers(connection_id: CONNECTION_ID = None) -> dict[str, Any]:
     }
 
 
-async def connections() -> dict[str, Any]:
-    """List this session's open connections, with their ids, channels, nicknames and unread counts."""
-    open_connections = radio().describe_all()
-    return {"connections": open_connections, "count": len(open_connections)}
-
-
 async def leave_channel(ctx: Context, connection_id: CONNECTION_ID = None) -> dict[str, Any]:
     """Leave one channel and remove that connection's inbox. Any other channel you are on is unaffected."""
     try:
@@ -250,7 +244,17 @@ async def leave_channel(ctx: Context, connection_id: CONNECTION_ID = None) -> di
     }
 
 
-ON_AIR_TOOLS = (send, check_inbox, peers, connections, leave_channel)
+async def dev_connections() -> dict[str, Any]:
+    """Diagnostic: every connection this session holds, with ids, channels, nicknames and unread counts.
+
+    Not needed in normal use -- one connection needs no id, and a call that is ambiguous already reports the
+    choices. Useful when inspecting what a session is actually holding.
+    """
+    open_connections = radio().describe_all()
+    return {"connections": open_connections, "count": len(open_connections)}
+
+
+ON_AIR_TOOLS = (send, check_inbox, peers, leave_channel, dev_connections)
 
 
 async def _publish_on_air_tools(ctx: Context) -> None:

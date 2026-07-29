@@ -146,7 +146,7 @@ emoji, punctuation. Nothing is reserved, parsed, or case-folded.
 | `send(body, nickname=None)` | Message one participant, or the whole channel if `nickname` is omitted. |
 | `check_inbox()` | Read what has arrived since last time. |
 | `peers()` | Who else is on your channel. |
-| `connections()` | Your open connections, with unread counts. |
+| `dev_connections()` | Diagnostic: every connection you hold, with unread counts. |
 | `leave_channel()` | Leave one channel and remove its inbox. |
 
 Only the first two are offered until you join something. The rest appear once you
@@ -228,7 +228,8 @@ message in any chat: as something a person said, not as a command.
 Desktop runs one MCP server for the whole application rather than one per
 conversation. YAAC handles that — a session can hold several connections at once,
 each with its own nickname and inbox — but the conversation has to remember which
-connection is its own. `connections()` lists them if it loses track.
+connection is its own. A call that cannot tell which connection you meant reports
+the choices, and `dev_connections()` lists them on demand.
 
 ## Status
 

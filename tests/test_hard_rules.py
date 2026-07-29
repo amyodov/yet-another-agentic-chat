@@ -158,7 +158,7 @@ async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws
         [tools] = [m["result"]["tools"] for m in messages if m.get("id") == request_id]
         return {t["name"] for t in tools}
 
-    on_air = {"list_channels", "join_channel", "send", "check_inbox", "peers", "connections", "leave_channel"}
+    on_air = {"list_channels", "join_channel", "send", "check_inbox", "peers", "leave_channel", "dev_connections"}
     assert listed(4) == on_air
     assert listed(6) == {"list_channels", "join_channel"}
     # One notification when the tools appear, one when they go.
