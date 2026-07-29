@@ -3,7 +3,7 @@
 Each tool is a single call that delegates to `Backend` and keeps no state of its own. `_radio` is the only
 module-level state, so the backend can be constructed lazily.
 
-The listed tools change with state. A dormant session shows only `list_channels` and `connect_to_channel`; the rest
+The listed tools change with state. A dormant session shows only `list_channels` and `join_channel`; the rest
 are added when the first membership opens and removed when the last one closes. This needs
 `notifications/tools/list_changed`, which Claude Code honours -- but only if the server advertises
 `tools.listChanged: true` in its initialize response. The SDK's `run_stdio_async()` builds initialization options
@@ -107,15 +107,15 @@ async def list_channels() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def connect_to_channel(
+async def join_channel(
     ctx: Context,
     channel: Annotated[str, Field(description="Exact channel name, as the user gave it.")],
     nickname: Annotated[str, Field(description="Exact nickname, as the user gave it.")],
 ) -> dict[str, Any]:
-    """Go on air: join CHANNEL as NICKNAME, creating the channel if it is empty.
+    """Go on air: join CHANNEL as NICKNAME. If nobody is on it, joining is what brings the channel into being.
 
     Ask the user to confirm both the channel and the nickname before calling this. Never invent a nickname or infer
-    one from the directory, hostname, or task. Adds the tools send, check_inbox, peers and disconnect.
+    one from the directory, hostname, or task. Adds send, check_inbox, peers, connections and leave_channel.
     """
     try:
         result = await radio().connect(channel, nickname)
@@ -137,7 +137,7 @@ async def connect_to_channel(
         "reminder": (
             "Nothing arrives on its own. Call check_inbox before acting on anything and again before ending your turn."
         ),
-        "new_tools": "send, check_inbox, peers, connections, disconnect are now available.",
+        "new_tools": "send, check_inbox, peers, connections, leave_channel are now available.",
     }
     if result.created:
         # A mistyped channel name silently produces a new empty channel, which is indistinguishable from a correct
@@ -196,7 +196,7 @@ async def check_inbox(connection_id: CONNECTION_ID = None) -> dict[str, Any]:
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
     if not memberships:
-        return _refused(NotConnected("not connected -- call connect_to_channel first"))
+        return _refused(NotConnected("not on any channel -- call join_channel first"))
 
     # Reading every membership at once is deliberate: unread messages on a channel the model forgot about would
     # otherwise never surface.
@@ -230,8 +230,8 @@ async def connections() -> dict[str, Any]:
     return {"connections": open_connections, "count": len(open_connections)}
 
 
-async def disconnect(ctx: Context, connection_id: CONNECTION_ID = None) -> dict[str, Any]:
-    """Leave a channel and remove that connection's inbox."""
+async def leave_channel(ctx: Context, connection_id: CONNECTION_ID = None) -> dict[str, Any]:
+    """Leave one channel and remove that connection's inbox. Any other channel you are on is unaffected."""
     try:
         membership = await radio().disconnect(connection_id)
     except (NotConnected, AmbiguousConnection) as exc:
@@ -239,13 +239,13 @@ async def disconnect(ctx: Context, connection_id: CONNECTION_ID = None) -> dict[
     if not radio().on_air:
         await _withdraw_on_air_tools(ctx)
     return {
-        "status": "disconnected",
+        "status": "left",
         "was": {"channel": membership.channel, "nickname": membership.nickname},
-        "still_connected": radio().describe_all(),
+        "still_joined": radio().describe_all(),
     }
 
 
-ON_AIR_TOOLS = (send, check_inbox, peers, connections, disconnect)
+ON_AIR_TOOLS = (send, check_inbox, peers, connections, leave_channel)
 
 
 async def _publish_on_air_tools(ctx: Context) -> None:

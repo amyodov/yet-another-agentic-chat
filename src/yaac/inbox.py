@@ -54,7 +54,7 @@ class Inbox:
     # -- lifecycle -------------------------------------------------------
 
     def create(self, descriptor: dict[str, Any]) -> None:
-        """Create the inbox. Called on ``connect_to_channel``, never before.
+        """Create the inbox. Called on ``join_channel``, never before.
 
         ``descriptor`` records who this handle is and which process owns it, so
         that a later out-of-process consumer can find the right inbox and tell

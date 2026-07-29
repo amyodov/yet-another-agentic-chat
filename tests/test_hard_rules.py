@@ -131,7 +131,7 @@ async def test_a_dormant_session_lists_only_the_two_tools_it_can_honour(endpoint
     # false and then sending the notification is correctly ignored, which is what made an earlier version of this
     # code look as though the client were at fault.
     assert init["capabilities"]["tools"] == {"listChanged": True}
-    assert {t["name"] for t in tools} == {"list_channels", "connect_to_channel"}
+    assert {t["name"] for t in tools} == {"list_channels", "join_channel"}
     # Tool descriptions are read by a model on every session; an undescribed tool is one it will misuse.
     assert [t["name"] for t in tools if not t["description"].strip()] == []
 
@@ -141,10 +141,10 @@ async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {"name": "connect_to_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
+        "params": {"name": "join_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
     }
     listing = {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
-    leave = {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "disconnect", "arguments": {}}}
+    leave = {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "leave_channel", "arguments": {}}}
     final = {"jsonrpc": "2.0", "id": 6, "method": "tools/list"}
     stdout, _ = await run_server(endpoint, HANDSHAKE + [connect, listing, leave, final])
     messages = decode(stdout)
@@ -153,9 +153,9 @@ async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws
         [tools] = [m["result"]["tools"] for m in messages if m.get("id") == request_id]
         return {t["name"] for t in tools}
 
-    on_air = {"list_channels", "connect_to_channel", "send", "check_inbox", "peers", "connections", "disconnect"}
+    on_air = {"list_channels", "join_channel", "send", "check_inbox", "peers", "connections", "leave_channel"}
     assert listed(4) == on_air
-    assert listed(6) == {"list_channels", "connect_to_channel"}
+    assert listed(6) == {"list_channels", "join_channel"}
     # One notification when the tools appear, one when they go.
     assert [m["method"] for m in messages if m.get("method")] == [
         "notifications/tools/list_changed",

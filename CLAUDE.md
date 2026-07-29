@@ -63,7 +63,7 @@ correct client ignores. `main` therefore runs the low-level server directly with
 `NotificationOptions(tools_changed=True)`. Verified at the protocol level: after the notification the client sends a
 fresh `tools/list` and can call the new tool.
 
-So the tool list is dynamic. Dormant sessions list `list_channels` and `connect_to_channel`; the other five appear on
+So the tool list is dynamic. Dormant sessions list `list_channels` and `join_channel`; the other five appear on
 first connect and go on last disconnect. If you ever seem to find a client bug here, check what we advertised in
 `initialize` before blaming the client.
 
@@ -116,7 +116,7 @@ Each has a test.
 
 1. **Nothing is written to stdout.** It carries the stdio transport; one `print()` breaks the session with a parse
    error. Log to stderr via `backend.log`.
-2. **A dormant server opens no socket and creates no file.** `Backend` is not constructed until `connect_to_channel`.
+2. **A dormant server opens no socket and creates no file.** `Backend` is not constructed until `join_channel`.
 3. **`send` never blocks.** A full queue or absent peer must raise. Blocking inside an MCP call freezes the session.
 4. **Nicknames and channel names are never parsed, split, validated, or case-folded.** That is why routing uses a
    separate opaque handle: `ROUTING_ID` has length and byte constraints that user-chosen names must not inherit.

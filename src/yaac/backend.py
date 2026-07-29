@@ -14,7 +14,7 @@ DEALER regardless of which process owns it.
 
 States:
 
-* **dormant** -- no sockets, no inbox, no tasks. `Backend` is not constructed until `connect_to_channel` is called,
+* **dormant** -- no sockets, no inbox, no tasks. `Backend` is not constructed until `join_channel` is called,
   and gives up the ROUTER again once the last membership disconnects. The server is installed in every session the
   user runs, so sessions that never join a channel must have no side effects.
 * **probing** -- a single DEALER opened and closed inside `probe_channels`. It does not bind. If it did, a session
@@ -312,7 +312,7 @@ class Backend:
         bookkeeping. With several open it is required, because guessing would deliver to the wrong channel.
         """
         if not self.memberships:
-            raise NotConnected("not connected -- call connect_to_channel first")
+            raise NotConnected("not connected -- call join_channel first")
         if connection_id is None:
             if len(self.memberships) > 1:
                 raise AmbiguousConnection(self.describe_all())

@@ -127,7 +127,7 @@ you:    what channels are on the air?
 agent:  [list_channels] → "z combinator forum" (3), "doom 13" (1)
 
 you:    you are Колян, go help Диман on z combinator
-agent:  [connect_to_channel(channel="z combinator forum", nickname="Колян")]
+agent:  [join_channel(channel="z combinator forum", nickname="Колян")]
         Connected. Диман is here. Note this did not create the channel.
 ```
 
@@ -142,20 +142,25 @@ emoji, punctuation. Nothing is reserved, parsed, or case-folded.
 | Tool | What it does |
 | --- | --- |
 | `list_channels()` | What is on the air, with participant counts. No side effects. |
-| `connect_to_channel(channel, nickname)` | Go on air. Creates the channel if empty, and says so. |
+| `join_channel(channel, nickname)` | Go on air. If nobody is on the channel, joining creates it — and says so. |
 | `send(body, nickname=None)` | Message one participant, or the whole channel if `nickname` is omitted. |
 | `check_inbox()` | Read what has arrived since last time. |
 | `peers()` | Who else is on your channel. |
 | `connections()` | Your open connections, with unread counts. |
-| `disconnect()` | Leave a channel and remove its inbox. |
+| `leave_channel()` | Leave one channel and remove its inbox. |
 
-Only the first two are offered until you connect. The rest appear once you are on
-air and disappear when you leave, so a session that never joins a channel carries
-almost nothing.
+Only the first two are offered until you join something. The rest appear once you
+are on air and disappear when you leave the last channel, so a session that never
+joins carries almost nothing.
 
-You may join more than one channel at once. `connect_to_channel` returns a
-connection id; pass it as `connection_id` when you hold several, and leave it out
-when you hold one.
+You may be on more than one channel at once. `join_channel` returns a connection
+id; pass it as `connection_id` when you hold several, and leave it out when you
+hold one.
+
+There is no separate verb for creating a channel, because a channel is not a
+lasting object — it exists exactly as long as somebody is on it. Joining an empty
+name is what brings it into being, and the result says `created: true` so a typo
+cannot quietly leave you alone on `z combinator forun`.
 
 ### Messages do not arrive on their own
 
