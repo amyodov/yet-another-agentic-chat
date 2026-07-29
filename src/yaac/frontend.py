@@ -33,6 +33,7 @@ from .backend import (
     AmbiguousConnection,
     Backend,
     ConnectionRefused,
+    Membership,
     NotConnected,
     check_zmq_capabilities,
     log,
@@ -63,27 +64,40 @@ def radio() -> Backend:
 
 
 def _refused(exc: Exception) -> dict[str, Any]:
-    """Turn a backend exception into a result the model can act on rather than a protocol error."""
-    if isinstance(exc, AmbiguousConnection):
-        return {
-            "status": "ambiguous_connection",
-            "error": str(exc),
-            "open_connections": exc.open_connections,
-            "next_step": "Call again with connection_id set to the one you mean.",
-        }
-    return {"status": "not_connected", "error": str(exc)}
+    """Turn a backend exception into a result the model can act on rather than a protocol error.
+
+    Whatever went wrong, the open connections are listed: the caller's next move is always to name one, and it may
+    have lost the id from its own context.
+    """
+    status = "ambiguous_connection" if isinstance(exc, AmbiguousConnection) else "not_connected"
+    refusal: dict[str, Any] = {"status": status, "error": str(exc)}
+    if open_connections := radio().describe_all():
+        refusal["open_connections"] = open_connections
+        refusal["next_step"] = "Call again with connection_id set to the one you mean."
+    return refusal
 
 
-def _unread() -> dict[str, Any]:
-    """Unread-message count, merged into tool results.
+def _unread(membership: Membership) -> dict[str, Any]:
+    """Unread count for one connection, merged into that connection's tool results.
+
+    Counted per connection, never per session. A count covering the whole process would tell a caller it has mail
+    that check_inbox on its own connection cannot find, since the messages belong to a different one -- and one
+    process serves every conversation in clients like Claude Desktop.
 
     MCP defines no server-initiated message that reaches the model's context, so unread messages cannot be pushed
     into an idle session. Attaching the count to results the model is already reading is the only in-protocol way to
-    signal that `check_inbox` is worth calling.
+    signal that check_inbox is worth calling.
     """
-    if (waiting := radio().total_unread()) > 0:
-        return {"unread": waiting, "action_required": f"{waiting} unread message(s) -- call check_inbox now"}
-    return {"unread": 0}
+    result: dict[str, Any] = {"unread": membership.pending_count()}
+    if result["unread"]:
+        result["action_required"] = f"{result['unread']} unread on this connection -- call check_inbox now"
+
+    # Mail on a connection other than this one is reported with its id, so it is addressable rather than an alarm
+    # the caller cannot act on.
+    elsewhere = [c for c in radio().describe_all() if c["unread"] and c["connection_id"] != membership.handle]
+    if elsewhere:
+        result["unread_on_other_connections"] = elsewhere
+    return result
 
 
 # -- always listed -------------------------------------------------------
@@ -186,30 +200,35 @@ async def send(
         "id": message_id,
         "from": membership.nickname,
         "to": nickname or "everyone on the channel",
-        **_unread(),
+        "connection_id": membership.handle,
+        **_unread(membership),
     }
 
 
-async def check_inbox(connection_id: CONNECTION_ID = None) -> dict[str, Any]:
-    """Read everything other sessions have sent since you last checked.
+async def check_inbox(
+    connection_id: Annotated[str, Field(description="The connection id join_channel gave you. Read only your own.")],
+) -> dict[str, Any]:
+    """Collect everything sent to CONNECTION_ID since you last checked.
 
-    Call this whenever you are connected: before acting on anything, and again before ending your turn. Messages are
-    never delivered on their own, so anything you do not collect here is simply not seen.
+    Call this whenever you are on a channel: before acting on anything, and again before ending your turn. Messages
+    are never delivered on their own, so anything you do not collect here is simply not seen.
+
+    The id is required, and reading removes the messages from that connection. One process serves every conversation
+    in some clients, so a call that guessed could consume mail belonging to a different conversation.
     """
     try:
-        memberships = list(radio().memberships.values()) if connection_id is None else [radio().resolve(connection_id)]
+        membership = radio().resolve(connection_id)
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
-    if not memberships:
-        return _refused(NotConnected("not on any channel -- call join_channel first"))
 
-    # Reading every membership at once is deliberate: unread messages on a channel the model forgot about would
-    # otherwise never surface.
-    messages = [{"connection_id": m.handle, **envelope} for m in memberships for envelope in m.receive()]
+    messages = membership.receive()
     return {
         "messages": messages,
         "count": len(messages),
+        "channel": membership.channel,
+        "as": membership.nickname,
         "status": f"{len(messages)} new" if messages else "no new messages",
+        **_unread(membership),
     }
 
 
@@ -225,7 +244,7 @@ async def peers(connection_id: CONNECTION_ID = None) -> dict[str, Any]:
         "addresses": [p.to_wire() for p in others],
         "count": len(others),
         "channel": membership.channel,
-        **_unread(),
+        **_unread(membership),
     }
 
 

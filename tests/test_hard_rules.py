@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
 
@@ -106,7 +108,7 @@ async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint, tmp_pa
             "method": "tools/call",
             "params": {"name": "join_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
         },
-        {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "check_inbox", "arguments": {}}},
+        {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "dev_connections", "arguments": {}}},
     ]
     stdout, _ = await run_server(
         endpoint,
@@ -166,3 +168,34 @@ async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws
         "notifications/tools/list_changed",
         "notifications/tools/list_changed",
     ]
+
+
+@pytest.mark.parametrize(
+    "arguments,expect",
+    [({}, "required"), ({"connection_id": "01NOSUCHCONNECTION"}, "no open connection")],
+    ids=["omitted", "unknown"],
+)
+async def test_check_inbox_will_not_read_an_inbox_it_was_not_given(endpoint, arguments, expect):
+    """Reading empties the inbox, and one process serves every conversation in clients like Claude Desktop. A call
+    that guessed, or accepted an id it does not hold, would consume mail belonging to another conversation."""
+    join = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": "join_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
+    }
+    read = {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {"name": "check_inbox", "arguments": arguments},
+    }
+    stdout, _ = await run_server(endpoint, HANDSHAKE + [join, read])
+    [result] = [m for m in decode(stdout) if m.get("id") == 4]
+
+    body = json.dumps(result).lower()
+    assert expect in body
+    # An omitted id fails schema validation; an unknown one is refused with the open connections listed, so a caller
+    # that lost its id can recover rather than guess.
+    if arguments:
+        assert "open_connections" in body
