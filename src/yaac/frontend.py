@@ -137,7 +137,12 @@ async def join_channel(
         "reminder": (
             "Nothing arrives on its own. Call check_inbox before acting on anything and again before ending your turn."
         ),
-        "new_tools": "send, check_inbox, peers, connections, leave_channel are now available.",
+        # Published by notification, so the client may need a moment to re-fetch tools/list. Saying they exist
+        # outright invites a call that fails while the list is still the old one.
+        "new_tools": (
+            "send, check_inbox, peers, connections and leave_channel are being published now. If they are not "
+            "listed yet, look again before assuming they are missing."
+        ),
     }
     if result.created:
         # A mistyped channel name silently produces a new empty channel, which is indistinguishable from a correct
