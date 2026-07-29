@@ -1,21 +1,21 @@
-"""The hub: routing table, whois, roster, bounce.
+"""The leader: routing table, whois, roster, bounce.
 
 Run by whichever backend succeeded in binding the endpoint. All state in this class is in memory and derivable from
-the connected peers: a replacement hub rebuilds it from the ``hello`` messages spokes send on reconnect, so nothing
-is persisted and no handover protocol is needed.
+the connected peers: a replacement leader rebuilds it from the ``hello`` messages participants send on reconnect,
+so nothing is persisted and no handover protocol is needed.
 
-Routing decisions use only the destination frame and the handle table. Message bodies are passed through as opaque
+Routing decisions use only the destination frame and the routing_id table. Message bodies are passed through as opaque
 bytes; no method here parses or branches on a body.
 
 Peer liveness without ``ROUTER_NOTIFY``: that option is part of the libzmq draft API and released pyzmq wheels bundle
 libzmq built without draft support, so ``setsockopt`` rejects it with ``EINVAL``. Two standard mechanisms replace it:
 
-* arrival -- each spoke re-sends ``hello`` when its DEALER monitor reports ``EVENT_CONNECTED``, which also fires
-  after a hub changeover, so the new hub is told who is present without asking;
-* departure -- ``ROUTER_MANDATORY`` makes ``send_multipart`` raise ``EHOSTUNREACH`` for a handle that has gone away,
+* arrival -- each participant re-sends ``hello`` when its DEALER monitor reports ``EVENT_CONNECTED``, which also fires
+  after a leader changeover, so the new leader is told who is present without asking;
+* departure -- ``ROUTER_MANDATORY`` makes ``send_multipart`` raise ``EHOSTUNREACH`` for a routing_id that has gone away,
   which is where ``evict`` is called from.
 
-``whois`` covers the remaining case: a data message arriving from a handle absent from the table.
+``whois`` covers the remaining case: a data message arriving from a routing_id absent from the table.
 """
 
 import time
@@ -27,9 +27,9 @@ import zmq
 from . import protocol
 from .protocol import Address, Identity
 
-# Bounds on `pending`, so a handle that never answers `whois` cannot grow the dict without limit. On overflow the
+# Bounds on `pending`, so a routing_id that never answers `whois` cannot grow the dict without limit. On overflow the
 # sender receives a bounce instead of the message being held indefinitely.
-PENDING_MAX_PER_HANDLE = 8
+PENDING_MAX_PER_PARTICIPANT = 8
 PENDING_MAX_AGE_SECONDS = 5.0
 
 
@@ -51,13 +51,13 @@ class Held:
     at: float
 
 
-class Hub:
+class Leader:
     """Routing table and message switch. Owns the ROUTER socket but runs no loop; `Backend._pump_router` calls in."""
 
     def __init__(self, router: zmq.Socket, log: Any) -> None:
         self.router = router
         self.log = log
-        self.handles: dict[bytes, Identity] = {}
+        self.routing_ids: dict[bytes, Identity] = {}
         self.by_name: dict[tuple[str, str], bytes] = {}
         self.channels: dict[str, ChannelInfo] = {}
         self.pending: dict[bytes, list[Held]] = {}
@@ -65,41 +65,41 @@ class Hub:
 
     # -- transmission ----------------------------------------------------
 
-    def _send(self, handle: bytes, message: dict[str, Any]) -> bool:
-        """Send one message to a handle.
+    def _send(self, routing_id: bytes, message: dict[str, Any]) -> bool:
+        """Send one message to a routing_id.
 
-        Returns False and evicts the handle when the ROUTER reports the peer unreachable. This is the only place a
+        Returns False and evicts the routing_id when the ROUTER reports the peer unreachable. This is the only place a
         departure is detected, since `ROUTER_NOTIFY` disconnect events are unavailable.
         """
         try:
-            self.router.send_multipart([handle, protocol.dumps(message)], zmq.NOBLOCK)
+            self.router.send_multipart([routing_id, protocol.dumps(message)], zmq.NOBLOCK)
             return True
         except zmq.ZMQError as exc:
             if exc.errno in (zmq.EHOSTUNREACH, zmq.EAGAIN):
-                self.log(f"peer unreachable, evicting {handle!r}: {zmq.strerror(exc.errno)}")
-                self.evict(handle)
+                self.log(f"peer unreachable, evicting {routing_id!r}: {zmq.strerror(exc.errno)}")
+                self.evict(routing_id)
                 return False
             raise
 
-    def _reachable(self, handle: bytes) -> bool:
-        """Test whether a handle is still connected, by sending it a `whois`.
+    def _reachable(self, routing_id: bytes) -> bool:
+        """Test whether a routing_id is still connected, by sending it a `whois`.
 
-        A connected spoke replies with `hello`, which `_hello` treats as idempotent. A departed one raises
+        A connected participant replies with `hello`, which `_hello` treats as idempotent. A departed one raises
         `EHOSTUNREACH` inside `_send`, which evicts it and returns False.
         """
-        return self._send(handle, protocol.whois())
+        return self._send(routing_id, protocol.whois())
 
     # -- membership ------------------------------------------------------
 
-    def evict(self, handle: bytes) -> None:
-        """Remove a handle from every table and send the remaining members an updated roster."""
-        self.pending.pop(handle, None)
-        self.whois_inflight.discard(handle)
-        if (identity := self.handles.pop(handle, None)) is None:
+    def evict(self, routing_id: bytes) -> None:
+        """Remove a routing_id from every table and send the remaining members an updated roster."""
+        self.pending.pop(routing_id, None)
+        self.whois_inflight.discard(routing_id)
+        if (identity := self.routing_ids.pop(routing_id, None)) is None:
             return
-        self.by_name.pop((identity.channel, identity.nickname), None)
+        self.by_name.pop((identity.channel, identity.name), None)
         if (channel := self.channels.get(identity.channel)) is not None:
-            channel.members.discard(handle)
+            channel.members.discard(routing_id)
             if channel.members:
                 self.broadcast_roster(identity.channel)
             else:
@@ -110,21 +110,22 @@ class Hub:
     def members(self, channel_name: str) -> set[bytes]:
         return channel.members.copy() if (channel := self.channels.get(channel_name)) else set()
 
-    def nicknames(self, channel_name: str) -> list[str]:
-        return sorted(self.handles[h].nickname for h in self.members(channel_name) if h in self.handles)
+    def names(self, channel_name: str) -> list[str]:
+        return sorted(self.routing_ids[h].name for h in self.members(channel_name) if h in self.routing_ids)
 
     def addresses(self, channel_name: str) -> list[Address]:
         """Every member of a channel, with both locators filled in from this table."""
         return sorted(
-            (self.handles[h].address(h) for h in self.members(channel_name) if h in self.handles),
-            key=lambda a: (a.nickname or "", a.handle or ""),
+            (self.routing_ids[h].address(h) for h in self.members(channel_name) if h in self.routing_ids),
+            key=lambda a: (a.name or "", a.routing_id or ""),
         )
 
     def broadcast_roster(self, channel_name: str) -> None:
-        """Send every member of a channel the current nickname list. Spokes cache it; it is not written to inboxes."""
+        """Send every member of a channel the current name list. Participants cache it; it is not written to
+        inboxes."""
         message = protocol.roster(channel_name, self.addresses(channel_name))
-        for handle in self.members(channel_name):
-            self._send(handle, message)
+        for routing_id in self.members(channel_name):
+            self._send(routing_id, message)
 
     def channel_report(self) -> list[dict[str, Any]]:
         """Name, uuid and member count of every occupied channel, as answered to a `channels?` query."""
@@ -165,52 +166,52 @@ class Hub:
                 self.log(f"ignoring control message {unknown!r} from {source!r}")
 
     def _hello(self, source: bytes, message: dict[str, Any]) -> None:
-        """Bind a (channel, nickname) pair to a handle.
+        """Bind a (channel, name) pair to a routing_id.
 
-        Spokes send this on every DEALER connect, so it must be idempotent: after a hub changeover all of them
+        Participants send this on every DEALER connect, so it must be idempotent: after a leader changeover all of them
         re-announce at once and most are restating an identity this table already holds.
         """
         channel_name = message.get("channel")
-        nickname = message.get("nickname")
-        if not isinstance(channel_name, str) or not isinstance(nickname, str):
-            self._send(source, protocol.error("hello needs a channel and a nickname"))
+        name = message.get("name")
+        if not isinstance(channel_name, str) or not isinstance(name, str):
+            self._send(source, protocol.error("hello needs a channel and a name"))
             return
 
-        key = (channel_name, nickname)
+        key = (channel_name, name)
         if (incumbent := self.by_name.get(key)) is not None and incumbent != source:
-            # The name is bound to a different handle. Refuse rather than reassign, because reassigning would
+            # The name is bound to a different routing_id. Refuse rather than reassign, because reassigning would
             # deliver messages intended for the incumbent to the newcomer. The exception is an incumbent that no
             # longer has a live connection -- typically a session killed while its TCP connection was still open --
-            # which would otherwise block the user from reusing their own nickname.
+            # which would otherwise block the user from reusing their own name.
             if self._reachable(incumbent):
-                self._send(source, protocol.error("nickname taken on this channel"))
+                self._send(source, protocol.error("name taken on this channel"))
                 return
             self.log(f"evicted unreachable incumbent for {key!r}")
 
-        # A handle re-announcing under a different name gives up the old one.
-        if (previous := self.handles.get(source)) is not None and previous != Identity(*key):
-            self.by_name.pop((previous.channel, previous.nickname), None)
+        # A routing_id re-announcing under a different name gives up the old one.
+        if (previous := self.routing_ids.get(source)) is not None and previous != Identity(*key):
+            self.by_name.pop((previous.channel, previous.name), None)
             if (old := self.channels.get(previous.channel)) is not None:
                 old.members.discard(source)
 
-        identity = Identity(channel=channel_name, nickname=nickname)
-        changed = self.handles.get(source) != identity
+        identity = Identity(channel=channel_name, name=name)
+        changed = self.routing_ids.get(source) != identity
 
         channel = self.channels.setdefault(channel_name, ChannelInfo(name=channel_name))
         channel.members.add(source)
-        self.handles[source] = identity
+        self.routing_ids[source] = identity
         self.by_name[key] = source
         self.whois_inflight.discard(source)
-
-        # Log only identity changes: reconnect-driven hellos would otherwise repeat a line per spoke per changeover.
+        # Log only identity changes: reconnect-driven hellos would otherwise repeat a line per participant on every
+        # changeover.
         if changed:
-            self.log(f"hello: {nickname!r} on {channel_name!r} as {source!r}")
+            self.log(f"hello: {name!r} on {channel_name!r} as {source!r}")
         self._flush_pending(source)
         self.broadcast_roster(channel_name)
 
     def _data(self, source: bytes, dest_frame: bytes, body: bytes) -> None:
-        """Route one data message. The sender's channel is read from `handles`, not from the destination frame."""
-        if (identity := self.handles.get(source)) is None:
+        """Route one data message. The sender's channel is read from `routing_ids`, not from the destination frame."""
+        if (identity := self.routing_ids.get(source)) is None:
             self._hold(source, dest_frame, body)
             return
 
@@ -221,7 +222,8 @@ class Hub:
             return
 
         # `channel` in the destination frame is checked against the sender's registered channel and otherwise
-        # unused. Because targets are always resolved within `identity.channel`, a spoke cannot address a channel it
+        # unused. Because targets are always resolved within `identity.channel`, a participant cannot address a channel
+        # it
         # has not joined even if it names one here.
         if destination.channel is not None and destination.channel != identity.channel:
             self._send(source, protocol.error(f"you are not on channel {destination.channel!r}"))
@@ -233,20 +235,20 @@ class Hub:
             targets = self.members(identity.channel) - {source}
             to_address = None
         else:
-            # A recipient may be named by either locator. The handle is checked first: it identifies one connection
-            # and is never reused, whereas a nickname is only unique while its holder is connected.
+            # A recipient may be named by either locator. The routing_id is checked first: it identifies one connection
+            # and is never reused, whereas a name is only unique while its holder is connected.
             target = None
-            if recipient.handle is not None:
-                candidate = recipient.handle.encode("ascii")
-                if candidate in self.handles and self.handles[candidate].channel == identity.channel:
+            if recipient.routing_id is not None:
+                candidate = recipient.routing_id.encode("ascii")
+                if candidate in self.routing_ids and self.routing_ids[candidate].channel == identity.channel:
                     target = candidate
-            if target is None and recipient.nickname is not None:
-                target = self.by_name.get((identity.channel, recipient.nickname))
+            if target is None and recipient.name is not None:
+                target = self.by_name.get((identity.channel, recipient.name))
             if target is None:
                 self._send(source, protocol.bounce(message_id, "no such recipient on this channel"))
                 return
             targets = {target}
-            to_address = self.handles[target].address(target)
+            to_address = self.routing_ids[target].address(target)
 
         envelope = protocol.envelope(
             channel=identity.channel,
@@ -255,25 +257,25 @@ class Hub:
             body=body.decode("utf-8", errors="replace"),
             msg_id=message_id,
         )
-        for handle in targets:
-            if not self._send(handle, envelope) and recipient is not None:
-                # The recipient's handle became unreachable between target lookup and send. Only direct messages
+        for routing_id in targets:
+            if not self._send(routing_id, envelope) and recipient is not None:
+                # The recipient's routing_id became unreachable between target lookup and send. Only direct messages
                 # bounce: a broadcast that fails for one member still reached the others.
                 self._send(source, protocol.bounce(message_id, "recipient went away"))
 
     # -- whois -----------------------------------------------------------
 
     def _hold(self, source: bytes, dest_frame: bytes, body: bytes) -> None:
-        """Hold a message from an unregistered handle and send that handle a `whois`.
+        """Hold a message from an unregistered routing_id and send that routing_id a `whois`.
 
-        Holding rather than bouncing means a send issued during a hub changeover is delivered late instead of
+        Holding rather than bouncing means a send issued during a leader changeover is delivered late instead of
         failing, so the caller sees no error. `_flush_pending` replays these once `hello` arrives.
         """
         held = self.pending.setdefault(source, [])
         now = time.monotonic()
         held[:] = [h for h in held if now - h.at < PENDING_MAX_AGE_SECONDS]
 
-        if len(held) >= PENDING_MAX_PER_HANDLE:
+        if len(held) >= PENDING_MAX_PER_PARTICIPANT:
             self._send(source, protocol.bounce(protocol.new_ulid(), "sender not identified"))
             return
 

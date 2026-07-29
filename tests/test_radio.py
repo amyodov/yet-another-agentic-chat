@@ -1,6 +1,7 @@
 """Two or more radios on one net: the behaviour v0 is defined by."""
 
 import asyncio
+from collections.abc import AsyncIterator, Callable
 
 import pytest
 
@@ -10,9 +11,11 @@ FORUM = "forum"
 OTHER = "other channel"
 SETTLE = 0.4  # generous for loopback TCP, short enough to keep the suite quick
 
+RadioFactory = Callable[[], Backend]
+
 
 @pytest.fixture
-async def radios(endpoint):
+async def radios(endpoint: str) -> AsyncIterator[RadioFactory]:
     """A factory that cleans up whatever it handed out."""
     made: list[Backend] = []
 
@@ -31,20 +34,20 @@ async def heard(backend: Backend) -> list[tuple]:
     await asyncio.sleep(SETTLE)
     return [
         (
-            (m.get("from") or {}).get("nickname"),
-            (m.get("to") or {}).get("nickname") if m.get("to") else None,
+            (m.get("from") or {}).get("name"),
+            (m.get("to") or {}).get("name") if m.get("to") else None,
             m.get("body"),
         )
         for m in backend.resolve(None).receive()
     ]
 
 
-async def test_probing_reports_the_net_without_joining_it(radios):
+async def test_probing_reports_the_net_without_joining_it(radios: RadioFactory) -> None:
     prober = radios()
     assert await prober.probe_channels(timeout=1.0) is None
     # Probing must never bind, or a session that merely looked would become the
-    # hub and drop it a second later.
-    assert [prober.is_hub, prober.on_air] == [False, False]
+    # leader and drop it a second later.
+    assert [prober.is_leader, prober.on_air] == [False, False]
 
     occupant = radios()
     await occupant.connect(FORUM, "ann")
@@ -57,7 +60,7 @@ async def test_probing_reports_the_net_without_joining_it(radios):
     assert await radios().probe_channels(timeout=1.0) is None
 
 
-async def test_joining_reports_creation_and_populates_both_rosters(radios):
+async def test_joining_reports_creation_and_populates_both_rosters(radios: RadioFactory) -> None:
     first = await radios().connect(FORUM, "ann")
     assert (first.created, first.peers) == (True, [])
 
@@ -66,7 +69,7 @@ async def test_joining_reports_creation_and_populates_both_rosters(radios):
     assert (second.created, second.peers) == (False, ["ann"])
 
     await asyncio.sleep(SETTLE)
-    assert b.resolve(None).peer_nicknames() == ["ann"]
+    assert b.resolve(None).peer_names() == ["ann"]
 
 
 @pytest.mark.parametrize(
@@ -74,13 +77,15 @@ async def test_joining_reports_creation_and_populates_both_rosters(radios):
     [("bob", "bob", []), (None, None, [])],
     ids=["direct", "broadcast"],
 )
-async def test_delivery_reaches_the_right_radios_and_not_the_sender(radios, recipient, expected_to, sender_hears):
+async def test_delivery_reaches_the_right_radios_and_not_the_sender(
+    radios: RadioFactory, recipient: str | None, expected_to: str | None, sender_hears: list
+) -> None:
     a, b, c = radios(), radios(), radios()
     await a.connect(FORUM, "ann")
     await b.connect(FORUM, "bob")
     await c.connect(FORUM, "cid")
 
-    await a.resolve(None).send("hold your commits", nickname=recipient)
+    await a.resolve(None).send("hold your commits", name=recipient)
 
     assert await heard(b) == [("ann", expected_to, "hold your commits")]
     # A third party hears a broadcast but not a message addressed to someone else.
@@ -91,16 +96,18 @@ async def test_delivery_reaches_the_right_radios_and_not_the_sender(radios, reci
 @pytest.mark.parametrize(
     "recipient,on_other_channel",
     [("nobody", False), ("bob", True)],
-    ids=["absent-nickname", "not-on-my-channel"],
+    ids=["absent-name", "not-on-my-channel"],
 )
-async def test_undeliverable_messages_bounce_to_the_sender(radios, recipient, on_other_channel):
+async def test_undeliverable_messages_bounce_to_the_sender(
+    radios: RadioFactory, recipient: str | None, on_other_channel: bool
+) -> None:
     a = radios()
     await a.connect(FORUM, "ann")
     if on_other_channel:
         b = radios()
         await b.connect(OTHER, "bob")
 
-    await a.resolve(None).send("anyone there?", nickname=recipient)
+    await a.resolve(None).send("anyone there?", name=recipient)
     await asyncio.sleep(SETTLE)
 
     [bounce] = a.resolve(None).receive()
@@ -108,7 +115,7 @@ async def test_undeliverable_messages_bounce_to_the_sender(radios, recipient, on
     assert bounce["from"] is None
     assert "no such recipient" in bounce["reason"]
     if on_other_channel:
-        # The hub takes the sender's channel from its own table, so speaking into
+        # The leader takes the sender's channel from its own table, so speaking into
         # a channel you have not joined is structurally impossible.
         assert await heard(b) == []
 
@@ -124,49 +131,49 @@ async def test_undeliverable_messages_bounce_to_the_sender(radios, recipient, on
     ],
     ids=["fake-roster", "fake-whois", "fake-error", "fake-sender", "not-json"],
 )
-async def test_a_body_is_delivered_verbatim_and_never_obeyed(radios, body):
-    # If the hub parsed bodies, these would be acted on instead of delivered,
+async def test_a_body_is_delivered_verbatim_and_never_obeyed(radios: RadioFactory, body: str) -> None:
+    # If the leader parsed bodies, these would be acted on instead of delivered,
     # and any participant could forge the control plane or another identity.
     a, b = radios(), radios()
     await a.connect(FORUM, "ann")
     await b.connect(FORUM, "bob")
 
-    await a.resolve(None).send(body, nickname="bob")
+    await a.resolve(None).send(body, name="bob")
     await asyncio.sleep(SETTLE)
 
     [received] = b.resolve(None).receive()
     assert received["body"] == body
-    assert received["from"]["nickname"] == "ann"
-    assert received["to"]["nickname"] == "bob"
+    assert received["from"]["name"] == "ann"
+    assert received["to"]["name"] == "bob"
     assert "kind" not in received
 
 
 @pytest.mark.parametrize(
-    "channel,nickname",
+    "channel,name",
     [
         ("forum", "ann"),
         ("日本語", "名前"),
         ("café", "naïve"),
-        ("channel with 🛰", "nick with 🛰"),
+        ("channel with 🛰", "name with 🛰"),
         ("  padded  ", "  padded  "),
         ('quotes "and" \\slashes', "null"),
         ("a" * 300, "b" * 300),
     ],
     ids=["ascii", "cjk", "accented", "emoji", "whitespace", "punctuation", "very-long"],
 )
-async def test_names_are_unrestricted_raw_text(radios, channel, nickname):
+async def test_names_are_unrestricted_raw_text(radios: RadioFactory, channel: str, name: str) -> None:
     # Transport constraints must not leak into names the user chose: routing uses
-    # a separate opaque handle precisely so arbitrary text is safe here.
+    # a separate opaque routing_id precisely so arbitrary text is safe here.
     a, b = radios(), radios()
-    result = await a.connect(channel, nickname)
-    assert (result.channel, result.nickname) == (channel, nickname)
+    result = await a.connect(channel, name)
+    assert (result.channel, result.name) == (channel, name)
 
     await b.connect(channel, "listener")
-    await a.resolve(None).send("hello", nickname="listener")
-    assert await heard(b) == [(nickname, "listener", "hello")]
+    await a.resolve(None).send("hello", name="listener")
+    assert await heard(b) == [(name, "listener", "hello")]
 
 
-async def test_a_taken_nickname_is_refused_rather_than_stolen(radios):
+async def test_a_taken_name_is_refused_rather_than_stolen(radios: RadioFactory) -> None:
     await radios().connect(FORUM, "bob")
 
     with pytest.raises(ConnectionRefused, match="taken"):
@@ -177,11 +184,11 @@ async def test_a_taken_nickname_is_refused_rather_than_stolen(radios):
     assert elsewhere.created is True
 
 
-async def test_losing_the_hub_restores_itself_with_no_user_action(radios):
+async def test_losing_the_leader_restores_itself_with_no_user_action(radios: RadioFactory) -> None:
     a, b = radios(), radios()
     await a.connect(FORUM, "ann")
     await b.connect(FORUM, "bob")
-    assert [a.is_hub, b.is_hub] == [True, False]
+    assert [a.is_leader, b.is_leader] == [True, False]
 
     await a.disconnect()
     c = radios()
@@ -189,29 +196,29 @@ async def test_losing_the_hub_restores_itself_with_no_user_action(radios):
 
     for _ in range(50):  # the election retries every ~2 s with jitter
         await asyncio.sleep(0.2)
-        if b.is_hub or c.is_hub:
+        if b.is_leader or c.is_leader:
             break
-    assert b.is_hub or c.is_hub  # somebody must have taken over the bind
+    assert b.is_leader or c.is_leader  # somebody must have taken over the bind
 
     await asyncio.sleep(1.0)
-    await c.resolve(None).send("still alive?", nickname="bob")
+    await c.resolve(None).send("still alive?", name="bob")
     assert await heard(b) == [("cid", "bob", "still alive?")]
 
 
-async def test_leaving_returns_to_dormant_and_drops_what_was_held(radios):
+async def test_leaving_returns_to_dormant_and_drops_what_was_held(radios: RadioFactory) -> None:
     a, b = radios(), radios()
     await a.connect(FORUM, "ann")
     await b.connect(FORUM, "bob")
-    await b.resolve(None).send("unread when ann leaves", nickname="ann")
+    await b.resolve(None).send("unread when ann leaves", name="ann")
     await asyncio.sleep(SETTLE)
     assert a.resolve(None).pending_count() == 1
 
     await a.disconnect()
-    assert [a.on_air, a.is_hub, a.memberships] == [False, False, {}]
+    assert [a.on_air, a.is_leader, a.memberships] == [False, False, {}]
 
 
 @pytest.mark.parametrize("operation", ["send", "receive", "peers"])
-async def test_on_air_operations_refuse_while_dormant(radios, operation):
+async def test_on_air_operations_refuse_while_dormant(radios: RadioFactory, operation: str) -> None:
     radio = radios()
     with pytest.raises(NotConnected):
         membership = radio.resolve(None)
@@ -224,7 +231,7 @@ async def test_on_air_operations_refuse_while_dormant(radios, operation):
                 membership.peers()
 
 
-async def test_connecting_twice_is_refused_and_a_refusal_leaves_no_trace(radios):
+async def test_connecting_twice_is_refused_and_a_refusal_leaves_no_trace(radios: RadioFactory) -> None:
     radio = radios()
     await radio.connect(FORUM, "ann")
     with pytest.raises(ConnectionRefused, match="already on"):
@@ -234,79 +241,79 @@ async def test_connecting_twice_is_refused_and_a_refusal_leaves_no_trace(radios)
     with pytest.raises(ConnectionRefused, match="taken"):
         await loser.connect(FORUM, "ann")
     # A refused join must leave the backend exactly as dormant as it was.
-    assert [loser.on_air, loser.is_hub, loser.memberships] == [False, False, {}]
+    assert [loser.on_air, loser.is_leader, loser.memberships] == [False, False, {}]
 
 
-async def test_one_process_holds_several_memberships_independently(radios):
+async def test_one_process_holds_several_memberships_independently(radios: RadioFactory) -> None:
     """Clients that run one MCP server per application rather than per conversation would otherwise force every
-    conversation to share a nickname and an inbox."""
+    conversation to share a name and an inbox."""
     host, other = radios(), radios()
     first = await host.connect(FORUM, "ann")
     second = await host.connect(OTHER, "deputy")
     assert first.connection_id != second.connection_id
-    assert [(c["channel"], c["nickname"]) for c in host.describe_all()] == [(FORUM, "ann"), (OTHER, "deputy")]
+    assert [(c["channel"], c["name"]) for c in host.describe_all()] == [(FORUM, "ann"), (OTHER, "deputy")]
 
-    # Each membership is an ordinary participant as far as the hub is concerned.
+    # Each membership is an ordinary participant as far as the leader is concerned.
     await other.connect(OTHER, "bob")
-    await host.resolve(second.connection_id).send("only deputy can send this", nickname="bob")
+    await host.resolve(second.connection_id).send("only deputy can send this", name="bob")
     assert await heard(other) == [("deputy", "bob", "only deputy can send this")]
 
     # And each has its own inbox.
-    await other.resolve(None).send("for deputy only", nickname="deputy")
+    await other.resolve(None).send("for deputy only", name="deputy")
     await asyncio.sleep(SETTLE)
     assert [m["body"] for m in host.resolve(second.connection_id).receive()] == ["for deputy only"]
     assert host.resolve(first.connection_id).receive() == []
 
 
-async def test_a_connection_id_is_required_only_when_it_is_ambiguous(radios):
+async def test_a_connection_id_is_required_only_when_it_is_ambiguous(radios: RadioFactory) -> None:
     host = radios()
     first = await host.connect(FORUM, "ann")
     # One membership: omitting the id is unambiguous, so it resolves.
-    assert host.resolve(None).nickname == "ann"
+    assert host.resolve(None).name == "ann"
 
     await host.connect(OTHER, "deputy")
     with pytest.raises(AmbiguousConnection):
         host.resolve(None)
-    assert host.resolve(first.connection_id).nickname == "ann"
+    assert host.resolve(first.connection_id).name == "ann"
 
     with pytest.raises(NotConnected):
         host.resolve("01NOSUCHCONNECTION")
 
 
-async def test_the_bind_is_released_when_the_last_membership_goes(radios):
+async def test_the_bind_is_released_when_the_last_membership_goes(radios: RadioFactory) -> None:
     """A process with no memberships must hold nothing, so another session can take the endpoint."""
     host = radios()
     first = await host.connect(FORUM, "ann")
     second = await host.connect(OTHER, "deputy")
-    assert host.is_hub is True
+    assert host.is_leader is True
 
     await host.disconnect(first.connection_id)
-    assert host.is_hub is True  # still one membership open
+    assert host.is_leader is True  # still one membership open
     await host.disconnect(second.connection_id)
-    assert [host.is_hub, host.on_air] == [False, False]
+    assert [host.is_leader, host.on_air] == [False, False]
 
 
-@pytest.mark.parametrize("locator", ["nickname", "handle"], ids=["by-nickname", "by-handle"])
-async def test_a_recipient_can_be_named_by_either_locator(radios, locator):
-    """A nickname is only unique while its holder is connected; a handle identifies one connection and is never
+@pytest.mark.parametrize("locator", ["name", "routing_id"], ids=["by-name", "by-routing_id"])
+async def test_a_recipient_can_be_named_by_either_locator(radios: RadioFactory, locator: str) -> None:
+    """A name is only unique while its holder is connected; a routing_id identifies one connection and is never
     reused. Both must reach the same participant."""
     a, b = radios(), radios()
     await a.connect(FORUM, "ann")
     target = await b.connect(FORUM, "bob")
 
-    keyword = {locator: "bob" if locator == "nickname" else target.connection_id}
+    keyword = {locator: "bob" if locator == "name" else target.connection_id}
     await a.resolve(None).send("addressed precisely", **keyword)
     assert await heard(b) == [("ann", "bob", "addressed precisely")]
 
 
-async def test_a_handle_from_another_channel_does_not_resolve(radios):
-    """Recipients are looked up within the sender's own channel, so a handle borrowed from elsewhere must bounce
+async def test_a_handle_from_another_channel_does_not_resolve(radios: RadioFactory) -> None:
+    """Recipients are looked up within the sender's own channel, so a routing_id borrowed from elsewhere must bounce
     rather than deliver across the boundary."""
     a, b = radios(), radios()
     await a.connect(FORUM, "ann")
     elsewhere = await b.connect(OTHER, "bob")
 
-    await a.resolve(None).send("wrong channel", handle=elsewhere.connection_id)
+    await a.resolve(None).send("wrong channel", routing_id=elsewhere.connection_id)
     await asyncio.sleep(SETTLE)
     assert await heard(b) == []
     [bounce] = a.resolve(None).receive()

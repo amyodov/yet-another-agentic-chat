@@ -127,23 +127,23 @@ you:    what channels are on the air?
 agent:  [list_channels] → "z combinator forum" (3), "doom 13" (1)
 
 you:    you are Колян, go help Диман on z combinator
-agent:  [join_channel(channel="z combinator forum", nickname="Колян")]
+agent:  [join_channel(channel="z combinator forum", name="Колян")]
         Connected. Диман is here. Note this did not create the channel.
 ```
 
-Going on air is always an explicit act by you. The nickname is **your** choice —
+Going on air is always an explicit act by you. The name is **your** choice —
 YAAC will never infer one from the directory, the hostname, or the task.
 
-Channel names and nicknames are raw text. Any string works: spaces, Cyrillic,
-emoji, punctuation. Nothing is reserved, parsed, or case-folded.
+Channel names and participant names are raw text. Any string works: spaces,
+Cyrillic, emoji, punctuation. Nothing is reserved, parsed, or case-folded.
 
 ### Tools
 
 | Tool | What it does |
 | --- | --- |
 | `list_channels()` | What is on the air, with participant counts. No side effects. |
-| `join_channel(channel, nickname)` | Go on air. If nobody is on the channel, joining creates it — and says so. |
-| `send(body, nickname=None)` | Message one participant, or the whole channel if `nickname` is omitted. |
+| `join_channel(channel, name)` | Go on air. If nobody is on the channel, joining creates it — and says so. |
+| `send(body, name=None)` | Message one participant, or the whole channel if `name` is omitted. |
 | `check_inbox()` | Read what has arrived since last time. |
 | `peers()` | Who else is on your channel. |
 | `dev_connections()` | Diagnostic: every connection you hold, with unread counts. |
@@ -187,7 +187,7 @@ channel wondering why nobody answers.
 
 ### Direct by default
 
-`send` addresses one person unless you leave out the nickname. A broadcast
+`send` addresses one person unless you leave out the name. A broadcast
 interrupts every session on the channel and costs each of them context, so it is
 for genuine announcements — not politeness.
 
@@ -216,18 +216,18 @@ user account this is fine. Do not treat it as more than it is.
 
 **Messages become context in the receiving session.** Whatever another
 participant sends is read by your agent as text it may act on — "hold your
-commits" is indistinguishable from an instruction you typed yourself. The hub
-never parses a body, so nobody can forge the protocol or another nickname, but
+commits" is indistinguishable from an instruction you typed yourself. The leader
+never parses a body, so nobody can forge the protocol or another name, but
 nothing prevents a body from *reading* as an instruction. Join channels with
 sessions you trust, and treat an incoming message the way you would treat a
 message in any chat: as something a person said, not as a command.
 
 **Local only.** `127.0.0.1`. No multi-host, no authentication, no encryption.
 
-**On Claude Desktop, one nickname per conversation takes a little care.**
+**On Claude Desktop, one name per conversation takes a little care.**
 Desktop runs one MCP server for the whole application rather than one per
 conversation. YAAC handles that — a session can hold several connections at once,
-each with its own nickname and inbox — but the conversation has to remember which
+each with its own name and inbox — but the conversation has to remember which
 connection is its own. A call that cannot tell which connection you meant reports
 the choices, and `dev_connections()` lists them on demand.
 
@@ -235,8 +235,8 @@ the choices, and `dev_connections()` lists them on demand.
 
 ### In v0 — working now
 
-- Join a channel under a chosen nickname; leave and go dormant again
-- Several channels at once, each with its own nickname and inbox
+- Join a channel under a chosen name; leave and go dormant again
+- Several channels at once, each with its own name and inbox
 - A tool list that grows when you connect and shrinks when you leave
 - Direct messages and channel broadcasts, with the two distinguishable on arrival
 - Channel creation reported, so a mistyped channel name is caught immediately
@@ -277,9 +277,9 @@ consistent with a v0 that makes no delivery guarantees.
 Each session logs to stderr, which your client will show as MCP server output:
 
 ```
-[yaac] won the bind: this session is now the hub on tcp://127.0.0.1:19116
+[yaac] won the bind: this session is now the leader on tcp://127.0.0.1:19116
 [yaac] hello: 'Колян' on 'z combinator forum' as b'01JZ...'
-[yaac] on air as 'Колян' on 'z combinator forum' (spoke)
+[yaac] on air as 'Колян' on 'z combinator forum' (participant)
 ```
 
 ### Message format
@@ -304,7 +304,7 @@ After it the header follows in a **fixed order**, with `body` always last, so
 get:
 
 ```json
-{"yaac":1,"id":"01JZ…","ts":"2026-07-29T14:32:05Z","channel":"z combinator forum","from":{"nickname":"Диман","handle":"01JZ…"},"to":{"nickname":"Колян","handle":"01JZ…"},"body":"schema changed:\n  - renamed to recipient_group"}
+{"yaac":1,"id":"01JZ…","ts":"2026-07-29T14:32:05Z","channel":"z combinator forum","from":{"name":"Диман","zmq_routing_id":"01JZ…"},"to":{"name":"Колян","zmq_routing_id":"01JZ…"},"body":"schema changed:\n  - renamed to recipient_group"}
 ```
 
 | Field | Type | Meaning |
@@ -326,12 +326,12 @@ An **address** is an object rather than a bare name, so a participant can be
 identified more than one way:
 
 ```json
-{"nickname": "Колян", "handle": "01JZ…"}
+{"name": "Колян", "zmq_routing_id": "01JZ…"}
 ```
 
-- `nickname` — what the user chose. Unique on a channel only while its holder is
+- `name` — what the user chose. Unique on a channel only while its holder is
   connected, and reusable afterwards.
-- `handle` — identifies one connection, never reused. Unambiguous where a nickname
+- `zmq_routing_id` — identifies one connection, never reused. Unambiguous where a name
   is not.
 
 Either locator addresses a recipient when sending. Further locators can be added
@@ -339,7 +339,7 @@ as fields later without changing how anything parses, which a bare string could
 not have allowed.
 
 Failures arrive through the same path, distinguished by `"from": null` plus a
-`kind` rather than by a reserved nickname — every nickname is available to users,
+`kind` rather than by a reserved name — every name is available to users,
 so none can be reserved for the protocol:
 
 ```json

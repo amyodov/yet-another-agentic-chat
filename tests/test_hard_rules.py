@@ -9,6 +9,7 @@ import contextlib
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -40,7 +41,7 @@ async def run_server(endpoint: str, requests: list[dict], env: dict[str, str] | 
     async def exchange() -> None:
         """Send each request only after the previous reply arrived.
 
-        The server handles requests concurrently, so pipelining them lets a tools/list overtake the tools/call that
+        The server routing_ids requests concurrently, so pipelining them lets a tools/list overtake the tools/call that
         was supposed to change the tool list.
         """
         for request in requests:
@@ -84,7 +85,7 @@ HANDSHAKE = [
 ]
 
 
-async def test_startup_writes_only_json_rpc_to_stdout(endpoint):
+async def test_startup_writes_only_json_rpc_to_stdout(endpoint: str) -> None:
     """stdout is the MCP stdio transport. One stray print kills the session with
     an opaque parse error, so every line there must be valid JSON-RPC."""
     stdout, stderr = await run_server(endpoint, HANDSHAKE)
@@ -95,7 +96,7 @@ async def test_startup_writes_only_json_rpc_to_stdout(endpoint):
     assert b"[yaac]" in stderr
 
 
-async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint, tmp_path):
+async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint: str, tmp_path: Path) -> None:
     """YAAC keeps everything in memory. Nothing it holds should outlive the process, however the process ends, so
     there is nothing to clean up after a crash and nothing to leak between sessions."""
     runtime = tmp_path / "runtime"
@@ -106,7 +107,7 @@ async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint, tmp_pa
             "jsonrpc": "2.0",
             "id": 4,
             "method": "tools/call",
-            "params": {"name": "join_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
+            "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}},
         },
         {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "dev_connections", "arguments": {}}},
     ]
@@ -127,7 +128,7 @@ async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint, tmp_pa
     assert list(runtime.iterdir()) == []
 
 
-async def test_a_dormant_session_lists_only_the_two_tools_it_can_honour(endpoint):
+async def test_a_dormant_session_lists_only_the_two_tools_it_can_honour(endpoint: str) -> None:
     """A dormant server runs in every session the user has, so its tool surface is the whole cost it imposes on the
     sessions that never join a channel."""
     stdout, _ = await run_server(endpoint, HANDSHAKE)
@@ -143,12 +144,12 @@ async def test_a_dormant_session_lists_only_the_two_tools_it_can_honour(endpoint
     assert [t["name"] for t in tools if not t["description"].strip()] == []
 
 
-async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws_them(endpoint):
+async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws_them(endpoint: str) -> None:
     connect = {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {"name": "join_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
+        "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}},
     }
     listing = {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
     leave = {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "leave_channel", "arguments": {}}}
@@ -175,14 +176,16 @@ async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws
     [({}, "required"), ({"connection_id": "01NOSUCHCONNECTION"}, "no open connection")],
     ids=["omitted", "unknown"],
 )
-async def test_check_inbox_will_not_read_an_inbox_it_was_not_given(endpoint, arguments, expect):
+async def test_check_inbox_will_not_read_an_inbox_it_was_not_given(
+    endpoint: str, arguments: dict[str, Any], expect: str
+) -> None:
     """Reading empties the inbox, and one process serves every conversation in clients like Claude Desktop. A call
     that guessed, or accepted an id it does not hold, would consume mail belonging to another conversation."""
     join = {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {"name": "join_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
+        "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}},
     }
     read = {
         "jsonrpc": "2.0",

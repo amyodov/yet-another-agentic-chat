@@ -43,7 +43,7 @@ mcp = MCPServer(
     "yaac",
     instructions=(
         "YAAC is a radio between concurrently running agentic sessions. Sessions join a named channel under a "
-        "nickname the user chooses, then talk to each other. Nothing is delivered on its own: while connected, call "
+        "name the user chooses, then talk to each other. Nothing is delivered on its own: while connected, call "
         "check_inbox before acting on anything, and again before you finish a turn, or messages from other sessions "
         "will sit unread."
     ),
@@ -94,7 +94,7 @@ def _unread(membership: Membership) -> dict[str, Any]:
 
     # Mail on a connection other than this one is reported with its id, so it is addressable rather than an alarm
     # the caller cannot act on.
-    elsewhere = [c for c in radio().describe_all() if c["unread"] and c["connection_id"] != membership.handle]
+    elsewhere = [c for c in radio().describe_all() if c["unread"] and c["connection_id"] != membership.routing_id]
     if elsewhere:
         result["unread_on_other_connections"] = elsewhere
     return result
@@ -124,27 +124,27 @@ async def list_channels() -> dict[str, Any]:
 async def join_channel(
     ctx: Context,
     channel: Annotated[str, Field(description="Exact channel name, as the user gave it.")],
-    nickname: Annotated[str, Field(description="Exact nickname, as the user gave it.")],
+    name: Annotated[str, Field(description="Exact name, as the user gave it.")],
 ) -> dict[str, Any]:
-    """Go on air: join CHANNEL as NICKNAME. If nobody is on it, joining is what brings the channel into being.
+    """Go on air: join CHANNEL as NAME. If nobody is on it, joining is what brings the channel into being.
 
-    Ask the user to confirm both the channel and the nickname before calling this. Never invent a nickname or infer
+    Ask the user to confirm both the channel and the name before calling this. Never invent a name or infer
     one from the directory, hostname, or task. Adds send, check_inbox, peers and leave_channel.
     """
     try:
-        result = await radio().connect(channel, nickname)
+        result = await radio().connect(channel, name)
     except ConnectionRefused as exc:
         return {
             "joined": False,
             "error": str(exc),
-            "next_step": "Ask the user for a different nickname; do not choose one yourself.",
+            "next_step": "Ask the user for a different name; do not choose one yourself.",
         }
 
     if len(radio().memberships) == 1:  # notify only when the tool set actually changes
         await _publish_on_air_tools(ctx)
     response: dict[str, Any] = {
         "joined": result.channel,
-        "nickname": result.nickname,
+        "name": result.name,
         "connection_id": result.connection_id,
         "created": result.created,
         "peers": result.peers,
@@ -178,19 +178,17 @@ CONNECTION_ID = Annotated[
 
 async def send(
     body: Annotated[str, Field(description="The message text.")],
-    nickname: Annotated[
-        str | None, Field(description="Recipient's nickname. Omit only to announce to everyone.")
-    ] = None,
+    name: Annotated[str | None, Field(description="Recipient's name. Omit only to announce to everyone.")] = None,
     connection_id: CONNECTION_ID = None,
 ) -> dict[str, Any]:
-    """Send a message to one participant, or to the whole channel if NICKNAME is omitted.
+    """Send a message to one participant, or to the whole channel if NAME is omitted.
 
     Prefer addressing one person: a broadcast interrupts every session on the channel, so reserve it for genuine
     announcements. Returns "accepted", which means handed to the network -- not that anybody has read it.
     """
     try:
         membership = radio().resolve(connection_id)
-        message_id = await membership.send(body, nickname)
+        message_id = await membership.send(body, name)
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
     except RuntimeError as exc:
@@ -198,9 +196,9 @@ async def send(
     return {
         "status": "accepted",
         "id": message_id,
-        "from": membership.nickname,
-        "to": nickname or "everyone on the channel",
-        "connection_id": membership.handle,
+        "from": membership.name,
+        "to": name or "everyone on the channel",
+        "connection_id": membership.routing_id,
         **_unread(membership),
     }
 
@@ -226,21 +224,21 @@ async def check_inbox(
         "messages": messages,
         "count": len(messages),
         "channel": membership.channel,
-        "as": membership.nickname,
+        "as": membership.name,
         "status": f"{len(messages)} new" if messages else "no new messages",
         **_unread(membership),
     }
 
 
 async def peers(connection_id: CONNECTION_ID = None) -> dict[str, Any]:
-    """List the nicknames currently on your channel, besides your own."""
+    """List the names currently on your channel, besides your own."""
     try:
         membership = radio().resolve(connection_id)
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
     others = membership.peers()
     return {
-        "peers": [p.nickname for p in others],
+        "peers": [p.name for p in others],
         "addresses": [p.to_wire() for p in others],
         "count": len(others),
         "channel": membership.channel,
@@ -258,13 +256,13 @@ async def leave_channel(ctx: Context, connection_id: CONNECTION_ID = None) -> di
         await _withdraw_on_air_tools(ctx)
     return {
         "status": "left",
-        "was": {"channel": membership.channel, "nickname": membership.nickname},
+        "was": {"channel": membership.channel, "name": membership.name},
         "still_joined": radio().describe_all(),
     }
 
 
 async def dev_connections() -> dict[str, Any]:
-    """Diagnostic: every connection this session holds, with ids, channels, nicknames and unread counts.
+    """Diagnostic: every connection this session holds, with ids, channels, names and unread counts.
 
     Not needed in normal use -- one connection needs no id, and a call that is ambiguous already reports the
     choices. Useful when inspecting what a session is actually holding.

@@ -1,45 +1,34 @@
 """Wire protocol: addresses, envelopes, control messages, and canonical serialization.
 
-Everything on the wire is JSON. Two kinds of message travel between a spoke and the hub:
+Everything on the wire is JSON. Two kinds of message travel between a participant and the leader:
 
-* **data** -- a spoke sends `[destination JSON][body]`; the hub delivers `[envelope JSON]`.
+* **data** -- a participant sends `[destination JSON][body]`; the leader delivers `[envelope JSON]`.
 * **control** -- a single JSON frame with a `kind` field.
 
-Control messages are told apart from envelopes by carrying `"from": null` rather than by a reserved nickname or
-channel name. Users may choose any string as a nickname, so the protocol reserves none.
+Control messages are told apart from envelopes by carrying `"from": null` rather than by a reserved name or
+channel name. Users may choose any string as a name, so the protocol reserves none.
 
 Two properties are deliberate and depended on elsewhere:
 
-**Serialization is canonical, with a fixed field order.** `dumps` writes fields in the order given by
-`FIELD_ORDER`, not alphabetically, and stamps every message with the protocol version first. Every YAAC message
-therefore begins with the same literal bytes:
+**Every message starts with the same nine bytes.** `dumps` stamps `yaac: PROTOCOL_VERSION` ahead of every other
+field, so a message always opens with `{"yaac":1` -- a magic number identifying the format and the version that
+wrote it, without parsing. No trailing comma is promised: a message carrying no other field ends right there.
 
-    {"yaac":1
+Receivers check the parsed `yaac` field rather than those bytes, since that is what the format guarantees; the byte
+prefix is for tools inspecting a stream. Everything goes through `dumps`; nothing serializes JSON by itself.
 
-which is a magic number: a reader can recognise a YAAC message, and tell which protocol version wrote it, from the
-first nine bytes, without parsing. There is deliberately no comma in that claim -- a message carrying no other field
-would end immediately after the version, so the format cannot promise one.
+**Participants are addressed by a structure, not a bare string.** An `Address` carries a name and a routing id, and
+further locators can be added as fields without changing how anything parses. A bare string would have had to be
+reinterpreted to add one.
 
-Receivers check the parsed `yaac` field, not the leading bytes; `parse` does this and rejects anything else. The
-byte prefix is for tools inspecting a stream, not the validation rule.
-
-The rest of the header -- `kind`, `id`, `ts`, `channel`, `from`, `to` -- follows in a fixed order too, so
-`head -c 200` on a log shows the routing of every message even when the bodies are long. `body` is always last for
-that reason.
-
-Field order being fixed also makes the encoding byte-stable: equal content produces equal bytes regardless of the
-order fields were built in, so a message has a stable identity to hash or sign. Every frame and every inbox line
-goes through `dumps`; nothing serializes JSON by itself.
-
-**Participants are addressed by a structure, not a bare string.** An `Address` currently carries a nickname and a
-handle, and further locators can be added as fields without changing how anything is parsed. A bare string would have
-had to be reinterpreted to add one.
+ZMQ's own vocabulary is kept explicit where it surfaces: what ZMQ calls a routing id is `zmq_routing_id` on the
+wire, never a YAAC-flavoured synonym.
 """
 
 import json
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 # ULID -------------------------------------------------------------------
@@ -78,61 +67,28 @@ so the comma is not something the format can promise."""
 MAGIC_PREFIX = b'{"yaac":'
 """Version-agnostic prefix, for a reader that wants to recognise a YAAC message before deciding it can read it."""
 
-FIELD_ORDER = (
-    "yaac",  # magic and version, always first
-    "kind",  # control messages: what this is
-    "id",
-    "ts",
-    "channel",
-    "from",
-    "to",
-    "nickname",  # inside an address
-    "handle",
-    "reply_to",
-    "reason",
-    "peers",
-    "channels",
-    "name",
-    "uuid",
-    "count",
-)
-"""Fixed serialization order. Fields not named here are written after these, alphabetically, and `body` last of
-all -- it is the only unbounded field, so keeping it at the end leaves the whole header near the start of the line."""
-
-_FIELD_RANK = {name: index for index, name in enumerate(FIELD_ORDER)}
-
-
-def _rank(item: tuple[str, Any]) -> tuple[int, int, str]:
-    key = item[0]
-    if key == "body":
-        return (2, 0, "")
-    if (known := _FIELD_RANK.get(key)) is not None:
-        return (0, known, "")
-    return (1, 0, key)
-
-
-def _ordered(value: Any) -> Any:
-    """Recursively rebuild dicts in FIELD_ORDER. Python preserves insertion order, so json writes them this way."""
-    if isinstance(value, dict):
-        return {key: _ordered(item) for key, item in sorted(value.items(), key=_rank)}
-    if isinstance(value, list):
-        return [_ordered(item) for item in value]
-    return value
-
 
 def dumps(obj: Any) -> bytes:
-    """Serialize to canonical JSON bytes, version-stamped and in fixed field order.
+    """Serialize to JSON bytes with the version stamped first.
 
-    A top-level dict is stamped with `yaac: PROTOCOL_VERSION`, so the magic number cannot be forgotten at any call
-    site. Fields are written in `FIELD_ORDER` rather than alphabetically, and separators carry no spaces, so equal
-    content serializes to equal bytes on any machine and in any Python version.
+    `yaac: PROTOCOL_VERSION` goes ahead of every other field. That is what makes the start of a message bytewise
+    stable: whatever the message is, its first nine bytes are `{"yaac":1`, so a reader can recognise a YAAC message
+    and the version that wrote it from the prefix alone, without parsing. Stamping it here rather than at each call
+    site means no message can be built without it.
 
-    Non-ASCII is emitted as UTF-8 rather than `\\u` escapes, which keeps names readable in the inbox files and ties
-    the byte sequence to the text rather than to an escaping choice.
+    Remaining fields keep the order they were built in, which the constructors below fix, so equal content still
+    serializes to equal bytes.
+
+    Separators carry no spaces. Non-ASCII is emitted as UTF-8 rather than `\\u` escapes, which keeps names readable
+    and ties the byte sequence to the text rather than to an escaping choice.
     """
     if isinstance(obj, dict):
         obj = {"yaac": PROTOCOL_VERSION, **obj}
-    return json.dumps(_ordered(obj), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    # MAGIC is written out independently of PROTOCOL_VERSION, so this catches the two drifting apart -- and any
+    # change to separators or stamping that would break the prefix a reader keys on.
+    assert encoded.startswith(MAGIC)
+    return encoded
 
 
 def loads(frame: bytes) -> Any:
@@ -170,20 +126,22 @@ class Address:
 
     Both locators are optional and identify the same participant by different means:
 
-    * `nickname` -- the name the user chose. Unique within a channel while its holder is connected, reusable
+    * `name` -- the name the user chose. Unique within a channel while its holder is connected, reusable
       afterwards, and meaningful to a human.
-    * `handle` -- the ULID used as the ZMQ routing id. Unique for the lifetime of one connection and never reused,
-      so it stays unambiguous where a nickname would not.
+    * `routing_id` -- the ULID used as the ZMQ routing id. Unique for the lifetime of one connection and never reused,
+      so it stays unambiguous where a name would not.
 
-    A sender fills in whichever it knows; the hub fills in both, from its own table rather than from anything the
+    A sender fills in whichever it knows; the leader fills in both, from its own table rather than from anything the
     sender claimed.
     """
 
-    nickname: str | None = None
-    handle: str | None = None
+    name: str | None = None
+    routing_id: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
-        return asdict(self)
+        # The routing id is named explicitly on the wire: it is a ZMQ transport address, and anything reading this
+        # should see that rather than guess what "routing_id" refers to.
+        return {"name": self.name, "zmq_routing_id": self.routing_id}
 
     @classmethod
     def from_wire(cls, value: Any) -> Address | None:
@@ -192,11 +150,11 @@ class Address:
             return None
         if not isinstance(value, dict):
             raise ValueError(f"an address must be an object or null, got {type(value).__name__}")
-        nickname, handle = value.get("nickname"), value.get("handle")
-        for name, item in (("nickname", nickname), ("handle", handle)):
+        name, routing_id = value.get("name"), value.get("zmq_routing_id")
+        for field_name, item in (("name", name), ("zmq_routing_id", routing_id)):
             if item is not None and not isinstance(item, str):
-                raise ValueError(f"address {name} must be a string or null")
-        return cls(nickname=nickname, handle=handle)
+                raise ValueError(f"address {field_name} must be a string or null")
+        return cls(name=name, routing_id=routing_id)
 
 
 # Data messages ----------------------------------------------------------
@@ -206,7 +164,7 @@ class Address:
 class Destination:
     """Frame 0 of a data message: which channel, and who on it.
 
-    `to=None` broadcasts to the whole channel. The hub validates `channel` against the sender's registered channel
+    `to=None` broadcasts to the whole channel. The leader validates `channel` against the sender's registered channel
     and otherwise ignores it; it is carried for logging and explicitness, never trusted.
     """
 
@@ -228,12 +186,12 @@ class Destination:
 
 @dataclass(frozen=True, slots=True)
 class Envelope:
-    """What the hub delivers to a recipient.
+    """What the leader delivers to a recipient.
 
     `to` is the recipient's address for a direct message and None for a broadcast. Recipients need the difference to
     choose a reply mode: answering a broadcast privately, or a private message publicly, reaches the wrong people.
 
-    `sender` is filled in by the hub from its handle table, so a participant cannot claim to be somebody else.
+    `sender` is filled in by the leader from its routing_id table, so a participant cannot claim to be somebody else.
     """
 
     id: str
@@ -244,13 +202,15 @@ class Envelope:
     body: str
 
     def to_wire(self) -> dict[str, Any]:
+        # `dumps` preserves this order, so build the routing header first and leave `body` last: it is the only
+        # unbounded field, and `head -c` on a log should show who sent what to whom however long the bodies run.
         return {
-            "body": self.body,
+            "id": self.id,
+            "ts": self.ts,
             "channel": self.channel,
             "from": self.sender.to_wire(),
-            "id": self.id,
             "to": self.to.to_wire() if self.to else None,
-            "ts": self.ts,
+            "body": self.body,
         }
 
     @classmethod
@@ -302,31 +262,31 @@ def is_control(message: dict[str, Any]) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Identity:
-    """What the hub records for one handle."""
+    """What the leader records for one routing_id."""
 
     channel: str
-    nickname: str
+    name: str
 
-    def address(self, handle: bytes | str) -> Address:
+    def address(self, routing_id: bytes | str) -> Address:
         """The full address of this participant, both locators filled in."""
         return Address(
-            nickname=self.nickname,
-            handle=handle.decode("ascii") if isinstance(handle, bytes) else handle,
+            name=self.name,
+            routing_id=routing_id.decode("ascii") if isinstance(routing_id, bytes) else routing_id,
         )
 
 
 # Control messages -------------------------------------------------------
 #
-# Hub -> spoke.
+# Leader -> participant.
 
 
 def whois() -> dict[str, Any]:
-    """Ask an unregistered handle to identify itself. Sent by a hub with no entry for it."""
+    """Ask an unregistered routing_id to identify itself. Sent by a leader with no entry for it."""
     return {"from": None, "kind": "whois"}
 
 
 def roster(channel: str, peers: list[Address]) -> dict[str, Any]:
-    """Current membership of a channel. Cached by the spoke; not written to any inbox."""
+    """Current membership of a channel. Cached by the participant; not written to any inbox."""
     return {
         "from": None,
         "kind": "roster",
@@ -350,20 +310,20 @@ def channels(entries: list[dict[str, Any]]) -> dict[str, Any]:
     return {"from": None, "kind": "channels", "channels": entries}
 
 
-# Spoke -> hub.
+# Participant -> leader.
 
 
-def hello(channel: str, nickname: str, reply_to: str) -> dict[str, Any]:
-    """Claim a (channel, nickname) pair for this handle."""
+def hello(channel: str, name: str, reply_to: str) -> dict[str, Any]:
+    """Claim a (channel, name) pair for this routing_id."""
     return {
         "from": None,
         "kind": "hello",
         "channel": channel,
-        "nickname": nickname,
+        "name": name,
         "reply_to": reply_to,
     }
 
 
 def channels_query() -> dict[str, Any]:
-    """Request the channel list. Sent by `Backend.probe_channels`; the sender is not registered by the hub."""
+    """Request the channel list. Sent by `Backend.probe_channels`; the sender is not registered by the leader."""
     return {"from": None, "kind": "channels?"}

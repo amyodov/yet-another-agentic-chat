@@ -2,6 +2,7 @@
 
 import json
 import time
+from typing import Any
 
 import pytest
 
@@ -43,7 +44,7 @@ AWKWARD_TEXT = pytest.mark.parametrize(
 )
 
 
-def test_ulid_properties():
+def test_ulid_properties() -> None:
     ulids = [protocol.new_ulid() for _ in range(1000)]
     assert len(set(ulids)) == 1000
     assert {len(u) for u in ulids} == {26}
@@ -59,34 +60,34 @@ def test_ulid_properties():
 
 
 @AWKWARD_TEXT
-def test_arbitrary_text_survives_the_wire_unchanged(text):
+def test_arbitrary_text_survives_the_wire_unchanged(text: str) -> None:
     where = Destination.from_wire(protocol.loads(protocol.dumps(protocol.destination(text, Address(text, text)))))
-    assert where == Destination(channel=text, to=Address(nickname=text, handle=text))
+    assert where == Destination(channel=text, to=Address(name=text, routing_id=text))
 
     sent = protocol.envelope(channel=text, sender=Address(text, "01H"), to=Address(text, "01T"), body=text)
     restored = Envelope.from_wire(protocol.loads(protocol.dumps(sent)))
-    assert (restored.channel, restored.sender.nickname, restored.to.nickname, restored.body) == (
+    assert (restored.channel, restored.sender.name, restored.to.name, restored.body) == (
         text,
         text,
         text,
         text,
     )
 
-    # No nickname is reserved, so text that looks like control traffic is not.
+    # No name is reserved, so text that looks like control traffic is not.
     assert protocol.is_control(sent) is False
 
 
 @pytest.mark.parametrize(
     "to,expected",
-    [(Address("bob", "01B"), {"handle": "01B", "nickname": "bob"}), (None, None)],
+    [(Address("bob", "01B"), {"name": "bob", "zmq_routing_id": "01B"}), (None, None)],
     ids=["direct", "broadcast"],
 )
-def test_envelope_records_how_it_was_addressed(to, expected):
+def test_envelope_records_how_it_was_addressed(to: Address | None, expected: Any) -> None:
     # Recipients must tell the two apart: answering privately to something everyone heard, or the reverse, reaches
     # the wrong people.
     sent = protocol.envelope(channel="forum", sender=Address("ann", "01A"), to=to, body="hi")
     assert sent["to"] == expected
-    assert sent["from"] == {"handle": "01A", "nickname": "ann"}
+    assert sent["from"] == {"name": "ann", "zmq_routing_id": "01A"}
     assert sent["channel"] == "forum"
     assert len(sent["id"]) == 26
     assert sent["ts"].endswith("Z")
@@ -103,23 +104,23 @@ def test_envelope_records_how_it_was_addressed(to, expected):
                 "kind": "roster",
                 "channel": "forum",
                 "peers": [
-                    {"handle": "01A", "nickname": "ann"},
-                    {"handle": "01B", "nickname": "bob"},
+                    {"name": "ann", "zmq_routing_id": "01A"},
+                    {"name": "bob", "zmq_routing_id": "01B"},
                 ],
             },
         ),
         (
-            protocol.bounce("01J", "no such nickname on this channel"),
+            protocol.bounce("01J", "no such name on this channel"),
             {
                 "from": None,
                 "kind": "bounce",
                 "id": "01J",
-                "reason": "no such nickname on this channel",
+                "reason": "no such name on this channel",
             },
         ),
         (
-            protocol.error("nickname taken on this channel"),
-            {"from": None, "kind": "error", "reason": "nickname taken on this channel"},
+            protocol.error("name taken on this channel"),
+            {"from": None, "kind": "error", "reason": "name taken on this channel"},
         ),
         (
             protocol.channels([{"name": "forum", "uuid": "01J", "count": 2}]),
@@ -135,7 +136,7 @@ def test_envelope_records_how_it_was_addressed(to, expected):
                 "from": None,
                 "kind": "hello",
                 "channel": "forum",
-                "nickname": "ann",
+                "name": "ann",
                 "reply_to": "01J",
             },
         ),
@@ -143,8 +144,8 @@ def test_envelope_records_how_it_was_addressed(to, expected):
     ],
     ids=["whois", "roster", "bounce", "error", "channels", "hello", "channels?"],
 )
-def test_control_messages_have_exactly_the_documented_shape(message, expected):
-    # Control traffic is identified by a null sender rather than a reserved nickname, because a user may
+def test_control_messages_have_exactly_the_documented_shape(message: dict[str, Any], expected: Any) -> None:
+    # Control traffic is identified by a null sender rather than a reserved name, because a user may
     # legitimately choose any string as one.
     assert message == expected
     assert protocol.is_control(message) is True
@@ -157,23 +158,26 @@ def test_control_messages_have_exactly_the_documented_shape(message, expected):
     [b"", b"not json", b"{", b'{"unterminated": ', b"\xff\xfe not utf-8"],
     ids=["empty", "text", "truncated", "partial", "bad-utf8"],
 )
-def test_malformed_frames_raise_valueerror(frame):
+def test_malformed_frames_raise_valueerror(frame: bytes) -> None:
     with pytest.raises(ValueError):
         protocol.loads(frame)
 
 
-def test_dumps_emits_utf8_rather_than_escapes():
+def test_dumps_emits_utf8_rather_than_escapes() -> None:
     assert "日本語".encode() in protocol.dumps({"n": "日本語"})
 
 
 @AWKWARD_TEXT
-def test_serialization_is_byte_stable_whatever_order_fields_were_built_in(text):
-    """Equal content must give equal bytes, so a message has one identity that could be hashed or signed."""
-    fields = {"channel": text, "id": "01A", "body": text, "ts": "T"}
-    shuffled = {"body": text, "ts": "T", "channel": text, "id": "01A"}
-    assert protocol.dumps(fields) == protocol.dumps(shuffled)
+def test_equal_messages_serialize_to_equal_bytes(text: str) -> None:
+    """A message has one identity, which is what a hash or signature would be computed over."""
 
-    encoded = protocol.dumps(fields).decode("utf-8")
+    def build():
+        return protocol.envelope(channel=text, sender=Address(text, "01A"), to=None, body=text, msg_id="01M")
+
+    first, second = protocol.dumps(build()), protocol.dumps(build())
+    assert first == second
+
+    encoded = first.decode("utf-8")
     assert ", " not in encoded and ": " not in encoded  # no insignificant whitespace
 
 
@@ -192,7 +196,7 @@ def test_serialization_is_byte_stable_whatever_order_fields_were_built_in(text):
     ],
     ids=["envelope", "whois", "roster", "bounce", "error", "channels", "hello", "channels?", "destination"],
 )
-def test_every_message_begins_with_the_magic_number(message):
+def test_every_message_begins_with_the_magic_number(message: dict[str, Any]) -> None:
     """A reader can identify a YAAC message, and the version that wrote it, from the first bytes alone."""
     encoded = protocol.dumps(message)
     assert encoded.startswith(MAGIC)
@@ -200,7 +204,7 @@ def test_every_message_begins_with_the_magic_number(message):
     assert protocol.parse(encoded)["yaac"] == PROTOCOL_VERSION
 
 
-def test_the_magic_claims_no_trailing_comma():
+def test_the_magic_claims_no_trailing_comma() -> None:
     """A message carrying nothing but the version would end right after it, so the comma cannot be promised."""
     assert MAGIC == b'{"yaac":1'
     assert protocol.dumps({}) == b'{"yaac":1}'
@@ -212,7 +216,7 @@ def test_the_magic_claims_no_trailing_comma():
     [{}, {"yaac": 2}, {"yaac": 0}, {"yaac": "1"}, {"yaac": None}, {"yaac": 1.0}, {"yaac": True}],
     ids=["missing", "newer", "older", "string", "null", "float", "bool"],
 )
-def test_a_frame_this_build_cannot_read_is_rejected(message):
+def test_a_frame_this_build_cannot_read_is_rejected(message: dict[str, Any]) -> None:
     """Validation reads the parsed field rather than the leading bytes: that is what the format guarantees."""
     frame = json.dumps(message).encode("utf-8")
     with pytest.raises(ValueError, match="unsupported protocol version"):
@@ -224,24 +228,22 @@ def test_a_frame_this_build_cannot_read_is_rejected(message):
     [b'"a string"', b"[1,2]", b"42", b"null"],
     ids=["string", "list", "number", "null"],
 )
-def test_a_frame_that_is_not_an_object_is_rejected(frame):
+def test_a_frame_that_is_not_an_object_is_rejected(frame: bytes) -> None:
     with pytest.raises(ValueError):
         protocol.parse(frame)
 
 
-def test_the_header_precedes_the_body_in_a_fixed_order():
+def test_the_version_leads_and_the_body_trails() -> None:
     """`head -c` on a log must show the routing of every message, however long the bodies are."""
     encoded = protocol.dumps(
         protocol.envelope(channel="forum", sender=Address("ann", "01A"), to=Address("bob", "01B"), body="x" * 5000)
     ).decode("utf-8")
-    positions = [encoded.index(f'"{field}"') for field in ("yaac", "id", "ts", "channel", "from", "to", "body")]
-    assert positions == sorted(positions)
-    # Inside an address too, and the body is last of everything.
-    assert encoded.index('"nickname"') < encoded.index('"handle"')
-    assert encoded.index('"body"') == max(positions)
+    assert encoded.index('"yaac"') == 1
+    # body is the only unbounded field, so everything routing-related precedes it.
+    assert max(encoded.index(f'"{f}"') for f in ("id", "ts", "channel", "from", "to")) < encoded.index('"body"')
 
 
-def test_an_envelope_serializes_to_one_line_whatever_the_body_contains():
+def test_an_envelope_serializes_to_one_line_whatever_the_body_contains() -> None:
     body = 'first\nsecond\ttabbed\n\n"quoted" and \\backslash'
     line = protocol.dumps(protocol.envelope(channel="forum", sender=Address("ann"), to=None, body=body))
     assert line.count(b"\n") == 0  # newlines survive as escapes, so the JSONL framing holds
@@ -252,22 +254,22 @@ def test_an_envelope_serializes_to_one_line_whatever_the_body_contains():
     "value,expected",
     [
         (None, None),
-        ({"nickname": "ann", "handle": "01A"}, Address("ann", "01A")),
-        ({"nickname": "ann"}, Address("ann", None)),
-        ({"handle": "01A"}, Address(None, "01A")),
+        ({"name": "ann", "zmq_routing_id": "01A"}, Address("ann", "01A")),
+        ({"name": "ann"}, Address("ann", None)),
+        ({"zmq_routing_id": "01A"}, Address(None, "01A")),
         ({}, Address(None, None)),
     ],
-    ids=["null", "both", "nickname-only", "handle-only", "empty"],
+    ids=["null", "both", "name-only", "routing_id-only", "empty"],
 )
-def test_addresses_accept_either_locator(value, expected):
+def test_addresses_accept_either_locator(value: Any, expected: Any) -> None:
     assert Address.from_wire(value) == expected
 
 
 @pytest.mark.parametrize(
     "value",
-    ["a bare string", 42, ["list"], {"nickname": 42}, {"handle": []}],
-    ids=["string", "number", "list", "bad-nickname", "bad-handle"],
+    ["a bare string", 42, ["list"], {"name": 42}, {"zmq_routing_id": []}],
+    ids=["string", "number", "list", "bad-name", "bad-routing_id"],
 )
-def test_a_malformed_address_is_rejected_rather_than_coerced(value):
+def test_a_malformed_address_is_rejected_rather_than_coerced(value: Any) -> None:
     with pytest.raises(ValueError):
         Address.from_wire(value)

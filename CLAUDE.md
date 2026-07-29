@@ -11,14 +11,16 @@ whenever you ship or defer something; it is the only record, as there is no sepa
 | --- | --- |
 | **frontend** | The MCP server: tool definitions, no state. |
 | **backend** | In-process module: ZMQ sockets, inbox, roster cache. |
-| **hub** | The backend that won the bind. Not privileged. |
-| **spoke** | Any backend that did not. |
-| **membership** | One (channel, nickname) a process holds. A process may hold several. |
-| **connection id** | The membership's handle, returned by `connect` and used to address it. |
+| **leader** | The backend that won the bind. Not privileged. |
+| **participant** | Any backend that did not. |
+| **membership** | One (channel, name) a process holds. A process may hold several. |
+| **connection id** | A membership's routing id, returned by `join_channel` and used to address it. |
 | **channel** | A named conversation. Addressing, not isolation. |
-| **nickname** | A user-chosen name within a channel. Raw UTF-8. |
-| **handle** | ULID used as the ZMQ `ROUTING_ID`. Also a locator inside an address. |
-| **address** | `{nickname, handle}`. How participants are named on the wire — never a bare string. |
+| **name** | A user-chosen name within a channel. Raw UTF-8. |
+| **routing_id** | ULID set as the ZMQ `ROUTING_ID`; `zmq_routing_id` on the wire. |
+| **address** | `{name, zmq_routing_id}`. How participants are named on the wire — never a bare string. |
+
+ZMQ's own words stay ZMQ's own, prefixed: `zmq_routing_id`, not a YAAC synonym for it.
 
 "frontend" and "backend" are relative to the MCP tool surface, not web layers. "channel" always means a YAAC channel,
 never the Claude Code feature of the same name.
@@ -29,7 +31,7 @@ never the Claude Code feature of the same name.
 src/yaac/
   frontend.py   MCP tool definitions
   backend.py    sockets, bind election, receive loops, connection state
-  hub.py        routing table, whois, roster, bounce
+  leader.py        routing table, whois, roster, bounce
   protocol.py   envelope + control messages, serialization
 ```
 
@@ -50,21 +52,19 @@ so a check for `hasattr(zmq, "ROUTER_NOTIFY")` passes, but `setsockopt` rejects 
 bundle libzmq built without drafts (`zmq.has('draft')` is `False`). True anywhere `pip install pyzmq` is used.
 
 Replacements, both non-draft:
-- **Arrival**: the spoke's DEALER monitor fires `EVENT_CONNECTED`, and the spoke re-sends `hello`. Covers the first
-  connect too, so a new hub is told who is present without asking.
-- **Departure**: `ROUTER_MANDATORY` raises `EHOSTUNREACH` when sending to a handle that left. Eviction is lazy,
+- **Arrival**: the participant's DEALER monitor fires `EVENT_CONNECTED`, and the participant re-sends `hello`. Covers
+    the first
+  connect too, so a new leader is told who is present without asking.
+- **Departure**: `ROUTER_MANDATORY` raises `EHOSTUNREACH` when sending to a routing id that left. Eviction is lazy,
   detected on the first failed send — which is when we want to bounce anyway.
 
-**Claude Code honours `tools/list_changed` — but only if the server advertises it.** An earlier version concluded
-the opposite. It was wrong: the SDK's `run_stdio_async()` builds initialization options from `NotificationOptions()`
-with every flag false, so we advertised `tools.listChanged: false` and then sent a change notification, which a
-correct client ignores. `main` therefore runs the low-level server directly with
-`NotificationOptions(tools_changed=True)`. Verified at the protocol level: after the notification the client sends a
-fresh `tools/list` and can call the new tool.
+**Claude Code honours `tools/list_changed`, but only if the server advertised `tools.listChanged: true`.** The SDK's
+`run_stdio_async()` hardcodes `NotificationOptions()` with every flag false, so `main` runs the low-level server
+directly to override it. Advertising false and then sending the notification looks like a client bug and isn't —
+check what `initialize` claimed first.
 
-So the tool list is dynamic. Dormant sessions list `list_channels` and `join_channel`; the other five appear on
-first connect and go on last disconnect. If you ever seem to find a client bug here, check what we advertised in
-`initialize` before blaming the client.
+So the tool list is dynamic: dormant sessions list `list_channels` and `join_channel`, the other five appear on first
+join and go on last leave.
 
 **MCP cannot push into an idle session.** Nothing in the server→client set (`notifications/message`,
 `resources/updated`, `list_changed`, `sampling/createMessage`, `elicitation/create`) reaches the model's context.
@@ -77,37 +77,35 @@ stdin. Better key than the cwd if v1 ever needs an out-of-process reader to find
 separates two sessions in one directory. Absent on Claude Desktop. Nothing uses it today.
 
 
-**Several memberships per process.** `Backend` holds a dict of `Membership`, each with its own handle, DEALER, roster
-and inbox, so the hub sees them as unrelated participants and no protocol change was needed. Tools take an optional
-`connection_id`; with one membership open it may be omitted, with several it is required rather than guessed. This
-matters for clients running one MCP server per application instead of per conversation, such as Claude Desktop.
+**Several memberships per process.** `Backend` holds a dict of `Membership`, each with its own routing id, DEALER,
+roster and inbox, so the leader sees them as unrelated participants and the protocol needed no change. This matters
+for clients running one server per application rather than per conversation, such as Claude Desktop — where it also
+means one conversation can address another's connection, so `check_inbox` requires the id rather than guessing.
 
 ## Message format
 
-`protocol.dumps` is the only serializer. It stamps `yaac: PROTOCOL_VERSION` on every top-level dict and writes
-fields in `FIELD_ORDER` — not alphabetically — so every message starts with the literal bytes `{"yaac":1`. That is a
-magic number: a reader identifies a YAAC message and its version from the first nine bytes without parsing. No
-trailing comma is claimed — a message with no other field ends right after the version. The rest
-of the header follows in fixed order and `body` is always last, so `head -c` on a log shows routing even when bodies
-are long.
+`protocol.dumps` is the only serializer, and it stamps `yaac: PROTOCOL_VERSION` first on every top-level dict. That
+ordering is the point: every message opens with `{"yaac":1`, a magic number a reader can key on without parsing. No
+trailing comma is promised — a message with no other field ends there. `dumps` asserts its own output against
+`MAGIC`, which is written out by hand so the two can be caught drifting apart.
 
-Fixed order also makes the bytes stable: equal content gives equal bytes, so a message has one identity to hash or
-sign later. Nothing computes a signature today.
+Field order is otherwise whatever the `to_wire` constructors build, so keep `body` last in them: it is the only
+unbounded field, and `head -c` on a log should show routing regardless of body size. Equal content gives equal bytes,
+so a message has one identity to hash or sign later. Nothing computes a signature today.
 
-Received frames go through `protocol.parse`, which rejects anything whose `yaac` field is not exactly this build's
-version — checking the parsed field, not the leading bytes, because that is what the format guarantees. The byte
-prefix is for tools inspecting a stream. `type(version) is not int` rather than `!=`, since `1.0` and `True` both
-equal `1` in Python.
+`PROTOCOL_VERSION` marks the encoding generation, not the field list. Renaming or adding fields does not bump it;
+replacing JSON with a binary framing would.
 
-Do not call `json.dumps` anywhere else — the stamp must not be forgettable. Use `parse`, not `loads`, on anything
-received. Add new fields to `FIELD_ORDER`, and bump `PROTOCOL_VERSION` when a change would confuse an older reader.
+Received frames go through `protocol.parse`, never `loads` — it rejects a `yaac` field that is not exactly this
+build's version, checking the parsed value rather than the leading bytes, since that is what the format guarantees.
+`type(version) is not int` because `1.0` and `True` both equal `1`. Do not call `json.dumps` anywhere else.
 
-`from` and `to` are `Address` objects, not strings: `{nickname, handle}`, either of which may be null. A nickname is
-unique on a channel only while its holder is connected; a handle identifies one connection and is never reused. New
-locators can be added as fields without breaking parsers, which is why this is a structure rather than a string.
+`from` and `to` are `Address` objects, not strings: `{name, zmq_routing_id}`, either nullable. A name is unique on a
+channel only while its holder is connected; a routing id identifies one connection and is never reused. Further
+locators can be added as fields without breaking parsers, which is why this is a structure.
 
 `Address`, `Destination` and `Envelope` are frozen dataclasses with `to_wire`/`from_wire`. Parse with `from_wire`
-rather than reading dict keys directly — it rejects a malformed address instead of silently coercing it.
+rather than reading dict keys — it rejects a malformed address instead of coercing it.
 
 ## Hard rules
 
@@ -119,10 +117,10 @@ Each has a test.
    membership all live in memory and die with the process, so there is nothing to clean up after a crash.
    `Backend` is not constructed at all until `join_channel`.
 3. **`send` never blocks.** A full queue or absent peer must raise. Blocking inside an MCP call freezes the session.
-4. **Nicknames and channel names are never parsed, split, validated, or case-folded.** That is why routing uses a
-   separate opaque handle: `ROUTING_ID` has length and byte constraints that user-chosen names must not inherit.
-5. **The hub never reads a body.** A body that looks like a control message gets delivered, not obeyed.
-6. **`from` and the sender's channel come from the hub's table**, never from the sender. This is what makes
+4. **Participant and channel names are never parsed, split, validated, or case-folded.** That is why routing uses a
+   separate opaque routing id: `ROUTING_ID` has length and byte constraints that user-chosen names must not inherit.
+5. **The leader never reads a body.** A body that looks like a control message gets delivered, not obeyed.
+6. **`from` and the sender's channel come from the leader's table**, never from the sender. This is what makes
    cross-channel injection impossible rather than merely forbidden.
 
 ## Tests
@@ -133,11 +131,14 @@ existing one only in its inputs, add a `parametrize` case instead.
 **Compare values.** Asserting that something was called, or is truthy, or is non-empty, tests nothing — a stub
 returning plausible shapes would pass.
 
-**No second argument to `assert`.** It suppresses pytest's diff, which explains the failure better. Put the
-explanation in a comment on the line above.
+**No second argument to `assert`.** It suppresses pytest's rewritten diff. Explain in a comment on the line above.
+
+In `src/` the rule is the opposite: no rewriting, and `-O` strips asserts, so use them only for invariants that
+cannot fail unless this code is wrong — `dumps` checking its own output against `MAGIC` is the case. Anything a peer
+or a malformed frame can trigger must `raise`.
 
 **ASCII names in tests** — `ann`, `bob`, `forum`. Non-ASCII appears only as parametrized data where encoding is what
-is being tested. Docs and examples may use any UTF-8; the README's Cyrillic nickname shows that names are
+is being tested. Docs and examples may use any UTF-8; the README's Cyrillic name shows that names are
 unrestricted. Tool descriptions are mostly English but need not be only English.
 
 ## Comments and docstrings
@@ -154,19 +155,19 @@ not "a stuck queue must fail, not grow silently".
 
 ## Design notes
 
-- **The hub holds no authority.** Soft state only, no policy, never configured, any participant can become it.
-- **The hub connects its own DEALER to its own ROUTER.** Costs one socket, and keeps a single send path — no "am I
-  the hub" branch anywhere.
-- **Probing must not bind.** If `list_channels` bound, a session that only looked would become hub and drop the
+- **The leader holds no authority.** Soft state only, no policy, never configured, any participant can become it.
+- **The leader connects its own DEALER to its own ROUTER.** Costs one socket, and keeps a single send path — no "am I
+  the leader" branch anywhere.
+- **Probing must not bind.** If `list_channels` bound, a session that only looked would become leader and drop the
   endpoint when the call returned. Its 10 s timeout is the only exit when nothing is listening, because ZMQ queues
   instead of failing. "Nobody on the air" is a normal answer.
-- **Hold, don't bounce, during a changeover.** A message from an unknown handle is parked and a `whois` sent, so the
+- **Hold, don't bounce, during a changeover.** A message from an unknown routing id is parked and a `whois` sent, so the
   send succeeds late instead of failing. `pending` is bounded on count and age so a silent peer cannot leak memory.
 - **No heartbeat, no TTL.** An idle net generates zero traffic.
 - **TCP, not `ipc`.** An `ipc://` socket file survives `kill -9` and then blocks bind forever, needing a lock file
   and manual cleanup. The kernel frees a TCP port itself, and libzmq sets `SO_REUSEADDR`.
 - **Port 19116** is `0x4AAC`, below the ephemeral range so the kernel won't hand it out as a source port.
-- **`created` is derived from the roster**, not sent by the hub: channels are deleted when empty, so being alone on
+- **`created` is derived from the roster**, not sent by the leader: channels are deleted when empty, so being alone on
   one means you just made it.
 
 ## Out of scope
@@ -175,8 +176,8 @@ Deferred on purpose — ask before adding.
 
 - Outbox, SQLite, retries, acks, dedup, store-and-forward
 - Delivery guarantees. v0 may lose messages, as long as it loses them loudly.
-- Multi-host, CURVE auth, namespaced nicknames
-- Direct spoke-to-spoke connections after discovery
+- Multi-host, CURVE auth, namespaced names
+- Direct participant-to-participant connections after discovery
 - Channel UUIDs as anything more than a reported field
 - Presence beyond "who is on this channel now"
 - Threads, reactions, history, shared task lists
