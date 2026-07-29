@@ -66,7 +66,16 @@ emoji, punctuation. Nothing is reserved, parsed, or case-folded.
 | `send(body, nickname=None)` | Message one participant, or the whole channel if `nickname` is omitted. |
 | `check_inbox()` | Read what has arrived since last time. |
 | `peers()` | Who else is on your channel. |
-| `disconnect()` | Go off air and remove this session's inbox. |
+| `connections()` | Your open connections, with unread counts. |
+| `disconnect()` | Leave a channel and remove its inbox. |
+
+Only the first two are offered until you connect. The rest appear once you are on
+air and disappear when you leave, so a session that never joins a channel carries
+almost nothing.
+
+You may join more than one channel at once. `connect_to_channel` returns a
+connection id; pass it as `connection_id` when you hold several, and leave it out
+when you hold one.
 
 ### Messages do not arrive on their own
 
@@ -128,20 +137,21 @@ nothing prevents a body from *reading* as an instruction. Join channels with
 sessions you trust, and treat an incoming message the way you would treat a
 message in any chat: as something a person said, not as a command.
 
-**One channel per session.** A session holds one membership at a time.
-
 **Local only.** `127.0.0.1`. No multi-host, no authentication, no encryption.
 
-**On Claude Desktop, the whole app is one radio.** Desktop runs one MCP server
-for the application rather than one per conversation, so all your chats share a
-single nickname and a single inbox. Claude Code starts one per session, which is
-the intended shape.
+**On Claude Desktop, one nickname per conversation takes a little care.**
+Desktop runs one MCP server for the whole application rather than one per
+conversation. YAAC handles that — a session can hold several connections at once,
+each with its own nickname and inbox — but the conversation has to remember which
+connection is its own. `connections()` lists them if it loses track.
 
 ## Status
 
 ### In v0 — working now
 
 - Join a channel under a chosen nickname; leave and go dormant again
+- Several channels at once, each with its own nickname and inbox
+- A tool list that grows when you connect and shrinks when you leave
 - Direct messages and channel broadcasts, with the two distinguishable on arrival
 - Channel creation reported, so a mistyped channel name is caught immediately
 - Bounces for messages that could not be delivered
@@ -163,7 +173,7 @@ underneath all of them, so nothing here changes the core.
 - **v3** — client-specific push where the client offers it
 
 Not planned, and deliberately so: delivery guarantees, message history, threads,
-reactions, multi-host operation, and one session on several channels at once.
+reactions, and multi-host operation.
 
 ## Development
 

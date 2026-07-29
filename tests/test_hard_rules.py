@@ -10,8 +10,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parent.parent
 SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
 
@@ -35,21 +33,27 @@ async def run_server(endpoint: str, requests: list[dict], env: dict[str, str] | 
     )
     assert process.stdin and process.stdout and process.stderr
 
-    last_id = max((r["id"] for r in requests if "id" in r), default=0)
     lines: list[bytes] = []
-    try:
+
+    async def exchange() -> None:
+        """Send each request only after the previous reply arrived.
+
+        The server handles requests concurrently, so pipelining them lets a tools/list overtake the tools/call that
+        was supposed to change the tool list.
+        """
         for request in requests:
             process.stdin.write((json.dumps(request) + "\n").encode())
-        await process.stdin.drain()
-
-        async def read_until_last_reply() -> None:
+            await process.stdin.drain()
+            if "id" not in request:
+                continue
             while line := await process.stdout.readline():
                 lines.append(line)
-                if json.loads(line).get("id") == last_id:
-                    return
+                if json.loads(line).get("id") == request["id"]:
+                    break
 
+    try:
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(read_until_last_reply(), timeout=20)
+            await asyncio.wait_for(exchange(), timeout=30)
     finally:
         process.kill()
         await process.wait()
@@ -116,39 +120,44 @@ async def test_a_dormant_server_creates_no_files_and_opens_no_sockets(endpoint, 
     assert list(runtime.iterdir()) == []
 
 
-async def test_all_six_tools_exist_while_dormant(endpoint):
-    """tools/list_changed is not honoured by Claude Code, so the on-air tools
-    cannot appear later. They exist always and refuse until connected."""
+async def test_a_dormant_session_lists_only_the_two_tools_it_can_honour(endpoint):
+    """A dormant server runs in every session the user has, so its tool surface is the whole cost it imposes on the
+    sessions that never join a channel."""
     stdout, _ = await run_server(endpoint, HANDSHAKE)
-    [tools] = [message["result"]["tools"] for message in decode(stdout) if message.get("id") == 2]
-    assert {t["name"] for t in tools} == {
-        "list_channels",
-        "connect_to_channel",
-        "send",
-        "check_inbox",
-        "peers",
-        "disconnect",
-    }
-    # Tool descriptions are re-read by a model every session, so each must carry
-    # one; an undescribed tool is one the model will not use correctly.
+    [init] = [m["result"] for m in decode(stdout) if m.get("id") == 1]
+    [tools] = [m["result"]["tools"] for m in decode(stdout) if m.get("id") == 2]
+
+    # A client acts on notifications/tools/list_changed only if the server said its list can change. Advertising
+    # false and then sending the notification is correctly ignored, which is what made an earlier version of this
+    # code look as though the client were at fault.
+    assert init["capabilities"]["tools"] == {"listChanged": True}
+    assert {t["name"] for t in tools} == {"list_channels", "connect_to_channel"}
+    # Tool descriptions are read by a model on every session; an undescribed tool is one it will misuse.
     assert [t["name"] for t in tools if not t["description"].strip()] == []
 
 
-@pytest.mark.parametrize("tool", ["send", "check_inbox", "peers", "disconnect"])
-async def test_on_air_tools_explain_themselves_while_dormant(endpoint, tool):
-    """A refusal must tell the model what to do next, not just fail."""
-    arguments = {"body": "x"} if tool == "send" else {}
-    requests = HANDSHAKE + [
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": tool, "arguments": arguments},
-        }
+async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws_them(endpoint):
+    connect = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": "connect_to_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
+    }
+    listing = {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
+    leave = {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "disconnect", "arguments": {}}}
+    final = {"jsonrpc": "2.0", "id": 6, "method": "tools/list"}
+    stdout, _ = await run_server(endpoint, HANDSHAKE + [connect, listing, leave, final])
+    messages = decode(stdout)
+
+    def listed(request_id):
+        [tools] = [m["result"]["tools"] for m in messages if m.get("id") == request_id]
+        return {t["name"] for t in tools}
+
+    on_air = {"list_channels", "connect_to_channel", "send", "check_inbox", "peers", "connections", "disconnect"}
+    assert listed(4) == on_air
+    assert listed(6) == {"list_channels", "connect_to_channel"}
+    # One notification when the tools appear, one when they go.
+    assert [m["method"] for m in messages if m.get("method")] == [
+        "notifications/tools/list_changed",
+        "notifications/tools/list_changed",
     ]
-    stdout, _ = await run_server(endpoint, requests)
-    [result] = [m for m in decode(stdout) if m.get("id") == 3]
-    # Refusing must be an ordinary answer the model can read and act on, not a
-    # protocol-level error.
-    assert "error" not in result
-    assert "not_connected" in result["result"]["content"][0]["text"]

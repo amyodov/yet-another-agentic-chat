@@ -13,6 +13,8 @@ whenever you ship or defer something; it is the only record, as there is no sepa
 | **backend** | In-process module: ZMQ sockets, inbox, roster cache. |
 | **hub** | The backend that won the bind. Not privileged. |
 | **spoke** | Any backend that did not. |
+| **membership** | One (channel, nickname) a process holds. A process may hold several. |
+| **connection id** | The membership's handle, returned by `connect` and used to address it. |
 | **channel** | A named conversation. Addressing, not isolation. |
 | **nickname** | A user-chosen name within a channel. Raw UTF-8. |
 | **handle** | ULID used as the ZMQ `ROUTING_ID`. Never shown to the user. |
@@ -53,8 +55,16 @@ Replacements, both non-draft:
 - **Departure**: `ROUTER_MANDATORY` raises `EHOSTUNREACH` when sending to a handle that left. Eviction is lazy,
   detected on the first failed send — which is when we want to bounce anyway.
 
-**Claude Code ignores `tools/list_changed`.** A tool added at runtime never became callable, same turn or later turn.
-So all six tools are always listed, and the on-air four return `not_connected` until connected. Don't try to hide them.
+**Claude Code honours `tools/list_changed` — but only if the server advertises it.** An earlier version concluded
+the opposite. It was wrong: the SDK's `run_stdio_async()` builds initialization options from `NotificationOptions()`
+with every flag false, so we advertised `tools.listChanged: false` and then sent a change notification, which a
+correct client ignores. `main` therefore runs the low-level server directly with
+`NotificationOptions(tools_changed=True)`. Verified at the protocol level: after the notification the client sends a
+fresh `tools/list` and can call the new tool.
+
+So the tool list is dynamic. Dormant sessions list `list_channels` and `connect_to_channel`; the other five appear on
+first connect and go on last disconnect. If you ever seem to find a client bug here, check what we advertised in
+`initialize` before blaming the client.
 
 **MCP cannot push into an idle session.** Nothing in the server→client set (`notifications/message`,
 `resources/updated`, `list_changed`, `sampling/createMessage`, `elicitation/create`) reaches the model's context.
@@ -65,6 +75,12 @@ Delivery is pull-only, so the tool descriptions have to carry the reminder to ca
 **`CLAUDE_CODE_SESSION_ID` is visible to both the MCP server and hooks**, and equals the `session_id` a hook gets on
 stdin. Better key than the cwd for a future out-of-process reader, since it separates two sessions in one directory.
 Absent on Claude Desktop. `connect` records it in the inbox descriptor; v0 does not use it.
+
+
+**Several memberships per process.** `Backend` holds a dict of `Membership`, each with its own handle, DEALER, roster
+and inbox, so the hub sees them as unrelated participants and no protocol change was needed. Tools take an optional
+`connection_id`; with one membership open it may be omitted, with several it is required rather than guessed. This
+matters for clients running one MCP server per application instead of per conversation, such as Claude Desktop.
 
 ## Hard rules
 
@@ -130,8 +146,6 @@ Deferred on purpose — ask before adding.
 
 - Outbox, SQLite, retries, acks, dedup, store-and-forward
 - Delivery guarantees. v0 may lose messages, as long as it loses them loudly.
-- One session on several channels. The design must not block it — hence handles as routing identity and inboxes keyed
-  by handle — but v0 is one channel per session.
 - Multi-host, CURVE auth, namespaced nicknames
 - Direct spoke-to-spoke connections after discovery
 - Channel UUIDs as anything more than a reported field
