@@ -15,8 +15,13 @@ and it works — it just has nobody to talk to. Buy a second and there's a
 conversation. Nothing is deployed, nothing is started, nothing is configured.
 
 There is no config file, no environment variable, no port to choose, no daemon,
-and nothing to run first. The first session that needs the rendezvous point claims
-it; if that session goes away, another takes over by itself.
+and nothing to run first.
+
+Sessions find each other at a fixed address, `tcp://127.0.0.1:19116` — `19116` is
+`0x4AAC`, which is where the name comes from. Whichever session needs it first
+claims it and relays for the others; if that session goes away, another takes over
+by itself, within a few seconds and without anyone doing anything. You never
+choose it, and nothing has to be running for the first session to start.
 
 ## Installing
 
@@ -100,13 +105,17 @@ Point a client at the checkout with `uv run --directory`:
 ```bash
 claude mcp add yaac-dev -- \
   uv run --directory /path/to/yet-another-agentic-chat yaac \
-  --endpoint tcp://127.0.0.1:19216
+  --endpoint tcp://127.0.0.1:19117
 ```
 
 The `--endpoint` is worth adding while developing: it puts your working copy on a
 separate rendezvous point, so a half-finished change cannot disturb the sessions
-you have on the released build, and the two nets stay invisible to each other. Any
-free port below the ephemeral range will do.
+you have on the released build, and the two nets stay invisible to each other.
+
+`19117` is just the port after the default. Any free port below 32768 will do;
+staying under that range keeps the kernel from handing the same number out as the
+source port of some unrelated outbound connection, which would make the bind fail
+for reasons that have nothing to do with YAAC.
 
 ## Using it
 
