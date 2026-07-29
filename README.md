@@ -265,39 +265,54 @@ A file appears there only while a connection is open, and is deleted on
 
 ### Message format
 
-Each line of an inbox file is one complete JSON object, newline-terminated —
-**always exactly one line per message**, whatever the body contains, because JSON
-escapes control characters. `jq` and `wc -l` both do the obvious thing.
+Every YAAC message — on the wire and in the inbox files — begins with the same ten
+bytes:
 
-The encoding is **canonical**: keys sorted at every level, no insignificant
-whitespace, UTF-8 rather than `\u` escapes. Equal content therefore always
-produces equal bytes, so a message has a stable identity that can be hashed or
-signed without renegotiating the format.
+```
+{"yaac":1,
+```
+
+That is a magic number and a version in one. A reader can tell a YAAC message from
+anything else, and tell which protocol version wrote it, without parsing a thing.
+
+After it the header follows in a **fixed order**, with `body` always last, so
+`head -c 200` on a log shows the routing of every message however long the bodies
+get:
 
 ```json
-{"body":"schema changed:\n  - renamed to recipient_group","channel":"z combinator forum","from":{"handle":"01JZ...","nickname":"Диман"},"id":"01JZ...","to":{"handle":"01JZ...","nickname":"Колян"},"ts":"2026-07-29T14:32:05Z"}
+{"yaac":1,"id":"01JZ…","ts":"2026-07-29T14:32:05Z","channel":"z combinator forum","from":{"nickname":"Диман","handle":"01JZ…"},"to":{"nickname":"Колян","handle":"01JZ…"},"body":"schema changed:\n  - renamed to recipient_group"}
 ```
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `body` | string | Whatever was sent, verbatim. Never parsed by YAAC. |
+| `yaac` | int | Protocol version. Always first. |
+| `id` | string | ULID. Time-sortable, so lines sort chronologically. |
+| `ts` | string | UTC, second resolution. |
 | `channel` | string | Channel the message travelled on. |
 | `from` | address | Who sent it. Filled in by the relaying session, never by the sender. |
-| `id` | string | ULID. Time-sortable, so lines sort chronologically. |
 | `to` | address or `null` | Recipient, or `null` if it was a broadcast. |
-| `ts` | string | UTC, second resolution. |
+| `body` | string | Whatever was sent, verbatim. Never parsed by YAAC. Always last. |
+
+Field order being fixed also makes the encoding byte-stable: the same content
+always produces the same bytes, whatever order the fields were built in. So a
+message has one identity, which could be hashed or signed later without changing
+the format.
+
+Each line is one complete JSON object, newline-terminated — **always exactly one
+line per message**, whatever the body contains, because JSON escapes control
+characters. `jq` and `wc -l` both do the obvious thing.
 
 An **address** is an object rather than a bare name, so a participant can be
 identified more than one way:
 
 ```json
-{"handle": "01JZ...", "nickname": "Колян"}
+{"nickname": "Колян", "handle": "01JZ…"}
 ```
 
 - `nickname` — what the user chose. Unique on a channel only while its holder is
   connected, and reusable afterwards.
-- `handle` — identifies one connection, never reused. Unambiguous where a
-  nickname is not.
+- `handle` — identifies one connection, never reused. Unambiguous where a nickname
+  is not.
 
 Either locator addresses a recipient when sending. Further locators can be added
 as fields later without changing how anything parses, which a bare string could
@@ -308,7 +323,7 @@ rather than by a reserved nickname — every nickname is available to users, so 
 can be reserved for the protocol:
 
 ```json
-{"from":null,"id":"01JZ...","kind":"bounce","reason":"no such recipient on this channel"}
+{"yaac":1,"kind":"bounce","id":"01JZ…","from":null,"reason":"no such recipient on this channel"}
 ```
 
 Writers append whole lines, but a reader can still arrive mid-flush. Consume only

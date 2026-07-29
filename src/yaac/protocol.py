@@ -10,10 +10,20 @@ channel name. Users may choose any string as a nickname, so the protocol reserve
 
 Two properties are deliberate and depended on elsewhere:
 
-**Serialization is canonical.** `dumps` sorts keys at every level and emits no insignificant whitespace, so the same
-content always produces the same bytes. Identical messages are therefore byte-identical, which is what makes a
-signature or content hash possible without renegotiating the format. Every frame and every inbox line goes through
-`dumps`; nothing serializes JSON by itself.
+**Serialization is canonical, with a fixed field order.** `dumps` writes fields in the order given by
+`FIELD_ORDER`, not alphabetically, and stamps every message with the protocol version first. Every YAAC message
+therefore begins with the same literal bytes:
+
+    {"yaac":1,
+
+which is a magic number: a reader can recognise a YAAC message, and tell which protocol version wrote it, from the
+first ten bytes, without parsing. The rest of the header -- `kind`, `id`, `ts`, `channel`, `from`, `to` -- follows in
+a fixed order too, so `head -c 200` on a log shows the routing of every message even when the bodies are long.
+`body` is always last for that reason.
+
+Field order being fixed also makes the encoding byte-stable: equal content produces equal bytes regardless of the
+order fields were built in, so a message has a stable identity to hash or sign. Every frame and every inbox line
+goes through `dumps`; nothing serializes JSON by itself.
 
 **Participants are addressed by a structure, not a bare string.** An `Address` currently carries a nickname and a
 handle, and further locators can be added as fields without changing how anything is parsed. A bare string would have
@@ -52,17 +62,67 @@ def utc_now() -> str:
 # Serialization ----------------------------------------------------------
 
 
+PROTOCOL_VERSION = 1
+"""Stamped onto every message as its first field. Bump when a change would confuse an older reader."""
+
+MAGIC = b'{"yaac":1,'
+"""The bytes every serialized message starts with. Recognises a YAAC message and its version without parsing."""
+
+FIELD_ORDER = (
+    "yaac",  # magic and version, always first
+    "kind",  # control messages: what this is
+    "id",
+    "ts",
+    "channel",
+    "from",
+    "to",
+    "nickname",  # inside an address
+    "handle",
+    "reply_to",
+    "reason",
+    "peers",
+    "channels",
+    "name",
+    "uuid",
+    "count",
+)
+"""Fixed serialization order. Fields not named here are written after these, alphabetically, and `body` last of
+all -- it is the only unbounded field, so keeping it at the end leaves the whole header near the start of the line."""
+
+_FIELD_RANK = {name: index for index, name in enumerate(FIELD_ORDER)}
+
+
+def _rank(item: tuple[str, Any]) -> tuple[int, int, str]:
+    key = item[0]
+    if key == "body":
+        return (2, 0, "")
+    if (known := _FIELD_RANK.get(key)) is not None:
+        return (0, known, "")
+    return (1, 0, key)
+
+
+def _ordered(value: Any) -> Any:
+    """Recursively rebuild dicts in FIELD_ORDER. Python preserves insertion order, so json writes them this way."""
+    if isinstance(value, dict):
+        return {key: _ordered(item) for key, item in sorted(value.items(), key=_rank)}
+    if isinstance(value, list):
+        return [_ordered(item) for item in value]
+    return value
+
+
 def dumps(obj: Any) -> bytes:
-    """Serialize to canonical JSON bytes.
+    """Serialize to canonical JSON bytes, version-stamped and in fixed field order.
 
-    Keys are sorted at every level and separators carry no spaces, so equal content serializes to equal bytes on any
-    machine and in any Python version. Non-ASCII is emitted as UTF-8 rather than `\\u` escapes, which keeps names
-    readable in the inbox files and keeps the byte sequence tied to the text rather than to an escaping choice.
+    A top-level dict is stamped with `yaac: PROTOCOL_VERSION`, so the magic number cannot be forgotten at any call
+    site. Fields are written in `FIELD_ORDER` rather than alphabetically, and separators carry no spaces, so equal
+    content serializes to equal bytes on any machine and in any Python version.
 
-    Key order is by Unicode code point (Python's own string ordering) rather than the UTF-16 code unit order that
-    RFC 8785 specifies. The two agree for every key this protocol uses, all of which are ASCII.
+    Non-ASCII is emitted as UTF-8 rather than `\\u` escapes, which keeps names readable in the inbox files and ties
+    the byte sequence to the text rather than to an escaping choice.
     """
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if isinstance(obj, dict):
+        obj = {"yaac": PROTOCOL_VERSION, **obj}
+    return json.dumps(_ordered(obj), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def loads(frame: bytes) -> Any:

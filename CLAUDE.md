@@ -85,9 +85,17 @@ matters for clients running one MCP server per application instead of per conver
 
 ## Message format
 
-`protocol.dumps` is the only serializer. It sorts keys at every level and emits no insignificant whitespace, so equal
-content gives equal bytes and a message can be hashed or signed later without a format change. Do not call
-`json.dumps` anywhere else, and do not add a field whose value is not deterministically serializable.
+`protocol.dumps` is the only serializer. It stamps `yaac: PROTOCOL_VERSION` on every top-level dict and writes
+fields in `FIELD_ORDER` — not alphabetically — so every message starts with the literal bytes `{"yaac":1,`. That is a
+magic number: a reader identifies a YAAC message and its version from the first ten bytes without parsing. The rest
+of the header follows in fixed order and `body` is always last, so `head -c` on a log shows routing even when bodies
+are long.
+
+Fixed order also makes the bytes stable: equal content gives equal bytes, so a message has one identity to hash or
+sign later. Nothing computes a signature today.
+
+Do not call `json.dumps` anywhere else — the stamp must not be forgettable. Add new fields to `FIELD_ORDER`, and bump
+`PROTOCOL_VERSION` when a change would confuse an older reader.
 
 `from` and `to` are `Address` objects, not strings: `{nickname, handle}`, either of which may be null. A nickname is
 unique on a channel only while its holder is connected; a handle identifies one connection and is never reused. New

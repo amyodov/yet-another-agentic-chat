@@ -77,15 +77,15 @@ def test_reading_an_inbox_that_was_never_created_is_harmless(isolated_runtime):
     assert [never.read_new(), never.pending_count()] == [[], 0]
 
 
-def test_lines_are_canonical_so_equal_content_gives_equal_bytes(box):
-    """The file is what a signature or content hash would be computed over, so the encoding must not depend on the
-    order the fields happened to be built in."""
-    box.append({"z": "last", "a": {"n": 2, "m": 1}, "body": "text"})
-    box.append({"body": "text", "a": {"m": 1, "n": 2}, "z": "last"})
+def test_lines_carry_the_magic_number_and_a_stable_field_order(box):
+    """A reader must be able to identify a YAAC line, and the version that wrote it, from its first bytes; and
+    equal content must give equal bytes so a line has one identity."""
+    box.append({"channel": "forum", "id": "01A", "body": "text"})
+    box.append({"body": "text", "id": "01A", "channel": "forum"})
 
     first, second = box.log_path.read_text(encoding="utf-8").splitlines()
     assert first == second
-    assert first == '{"a":{"m":1,"n":2},"body":"text","z":"last"}'
+    assert first == '{"yaac":1,"id":"01A","channel":"forum","body":"text"}'
 
 
 def test_a_multiline_body_still_occupies_exactly_one_line(box):

@@ -5,7 +5,7 @@ import time
 import pytest
 
 from yaac import protocol
-from yaac.protocol import Address, Destination, Envelope
+from yaac.protocol import MAGIC, PROTOCOL_VERSION, Address, Destination, Envelope
 
 # Text that has broken naive implementations. Names are raw UTF-8 and are never
 # parsed, split, validated, or case-folded, so all of these must survive intact.
@@ -143,11 +143,12 @@ def test_envelope_records_how_it_was_addressed(to, expected):
     ids=["whois", "roster", "bounce", "error", "channels", "hello", "channels?"],
 )
 def test_control_messages_have_exactly_the_documented_shape(message, expected):
-    # Control traffic is identified by a null sender rather than a reserved
-    # nickname, because a user may legitimately choose any string as one.
+    # Control traffic is identified by a null sender rather than a reserved nickname, because a user may
+    # legitimately choose any string as one.
     assert message == expected
     assert protocol.is_control(message) is True
-    assert protocol.loads(protocol.dumps(message)) == expected
+    # dumps stamps the version, so what comes back is the message plus its magic field.
+    assert protocol.loads(protocol.dumps(message)) == {"yaac": PROTOCOL_VERSION, **expected}
 
 
 @pytest.mark.parametrize(
@@ -165,17 +166,47 @@ def test_dumps_emits_utf8_rather_than_escapes():
 
 
 @AWKWARD_TEXT
-def test_serialization_is_canonical_so_equal_content_gives_equal_bytes(text):
-    """A byte-stable encoding is what a signature or content hash would be computed over, so insertion order must
-    not be able to change the result."""
-    fields = {"z": text, "a": {"n": 1, "m": text}, "body": text}
-    shuffled = {"body": text, "a": {"m": text, "n": 1}, "z": text}
+def test_serialization_is_byte_stable_whatever_order_fields_were_built_in(text):
+    """Equal content must give equal bytes, so a message has one identity that could be hashed or signed."""
+    fields = {"channel": text, "id": "01A", "body": text, "ts": "T"}
+    shuffled = {"body": text, "ts": "T", "channel": text, "id": "01A"}
     assert protocol.dumps(fields) == protocol.dumps(shuffled)
 
     encoded = protocol.dumps(fields).decode("utf-8")
-    assert encoded.index('"a"') < encoded.index('"body"') < encoded.index('"z"')  # sorted at the top level
-    assert encoded.index('"m"') < encoded.index('"n"')  # and at every level below
     assert ", " not in encoded and ": " not in encoded  # no insignificant whitespace
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        protocol.envelope(channel="forum", sender=Address("ann"), to=None, body="hi"),
+        protocol.whois(),
+        protocol.roster("forum", [Address("ann", "01A")]),
+        protocol.bounce("01J", "gone"),
+        protocol.error("refused"),
+        protocol.channels([{"name": "forum", "uuid": "01J", "count": 1}]),
+        protocol.hello("forum", "ann", "01J"),
+        protocol.channels_query(),
+        protocol.destination("forum", Address("bob")),
+    ],
+    ids=["envelope", "whois", "roster", "bounce", "error", "channels", "hello", "channels?", "destination"],
+)
+def test_every_message_begins_with_the_magic_number(message):
+    """A reader can identify a YAAC message, and the version that wrote it, from the first bytes alone."""
+    assert protocol.dumps(message).startswith(MAGIC)
+    assert protocol.loads(protocol.dumps(message))["yaac"] == PROTOCOL_VERSION
+
+
+def test_the_header_precedes_the_body_in_a_fixed_order():
+    """`head -c` on a log must show the routing of every message, however long the bodies are."""
+    encoded = protocol.dumps(
+        protocol.envelope(channel="forum", sender=Address("ann", "01A"), to=Address("bob", "01B"), body="x" * 5000)
+    ).decode("utf-8")
+    positions = [encoded.index(f'"{field}"') for field in ("yaac", "id", "ts", "channel", "from", "to", "body")]
+    assert positions == sorted(positions)
+    # Inside an address too, and the body is last of everything.
+    assert encoded.index('"nickname"') < encoded.index('"handle"')
+    assert encoded.index('"body"') == max(positions)
 
 
 def test_an_envelope_serializes_to_one_line_whatever_the_body_contains():
