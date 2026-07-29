@@ -215,7 +215,13 @@ async def peers(connection_id: CONNECTION_ID = None) -> dict[str, Any]:
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
     others = membership.peers()
-    return {"peers": others, "count": len(others), "channel": membership.channel, **_unread()}
+    return {
+        "peers": [p.nickname for p in others],
+        "addresses": [p.to_wire() for p in others],
+        "count": len(others),
+        "channel": membership.channel,
+        **_unread(),
+    }
 
 
 async def connections() -> dict[str, Any]:

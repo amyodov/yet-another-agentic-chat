@@ -4,7 +4,11 @@ One inbox per handle, in two files: ``{handle}.jsonl`` holding one JSON message 
 holding the byte offset consumed so far. The log is never truncated for the lifetime of the membership, so
 ``tail -f`` on it shows every message this participant received.
 
-Consumers read forward from the cursor offset and rewrite it under ``flock``, which prevents two readers from
+Lines are written with `protocol.dumps`, so each is canonical JSON: keys sorted at every level, no insignificant
+whitespace, and exactly one line per message however many newlines the body contains. Equal content therefore
+produces equal bytes, which is what signing or content-hashing a message would need.
+
+Consumers read forward from the cursor offset and rewrite it under `flock`, which prevents two readers from
 returning the same message. The only consumer in v0 is the ``check_inbox`` MCP tool, but the files are readable by
 any process, so the v1 delivery hook needs no change here.
 
@@ -17,6 +21,8 @@ import json
 import os
 import pathlib
 from typing import Any
+
+from .protocol import dumps
 
 
 def runtime_dir() -> pathlib.Path:
@@ -58,7 +64,7 @@ class Inbox:
         self.live_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_path.touch()
         self.cursor_path.write_text("0")
-        self.live_path.write_text(json.dumps(descriptor, ensure_ascii=False))
+        self.live_path.write_text(dumps(descriptor).decode("utf-8"))
 
     def destroy(self) -> None:
         """Remove every file this inbox owns. Called on ``disconnect``."""
@@ -70,7 +76,7 @@ class Inbox:
     def append(self, message: dict[str, Any]) -> None:
         """Append one message. Opened per call in append mode, so an external
         reader always sees a complete line."""
-        line = json.dumps(message, ensure_ascii=False) + "\n"
+        line = dumps(message).decode("utf-8") + "\n"
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(line)
             f.flush()

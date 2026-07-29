@@ -25,7 +25,7 @@ from typing import Any
 import zmq
 
 from . import protocol
-from .protocol import Identity
+from .protocol import Address, Identity
 
 # Bounds on `pending`, so a handle that never answers `whois` cannot grow the dict without limit. On overflow the
 # sender receives a bounce instead of the message being held indefinitely.
@@ -113,9 +113,16 @@ class Hub:
     def nicknames(self, channel_name: str) -> list[str]:
         return sorted(self.handles[h].nickname for h in self.members(channel_name) if h in self.handles)
 
+    def addresses(self, channel_name: str) -> list[Address]:
+        """Every member of a channel, with both locators filled in from this table."""
+        return sorted(
+            (self.handles[h].address(h) for h in self.members(channel_name) if h in self.handles),
+            key=lambda a: (a.nickname or "", a.handle or ""),
+        )
+
     def broadcast_roster(self, channel_name: str) -> None:
         """Send every member of a channel the current nickname list. Spokes cache it; it is not written to inboxes."""
-        message = protocol.roster(channel_name, self.nicknames(channel_name))
+        message = protocol.roster(channel_name, self.addresses(channel_name))
         for handle in self.members(channel_name):
             self._send(handle, message)
 
@@ -208,7 +215,7 @@ class Hub:
             return
 
         try:
-            destination = protocol.loads(dest_frame)
+            destination = protocol.Destination.from_wire(protocol.loads(dest_frame))
         except ValueError as exc:
             self.log(f"dropping malformed destination from {source!r}: {exc}")
             return
@@ -216,31 +223,40 @@ class Hub:
         # `channel` in the destination frame is checked against the sender's registered channel and otherwise
         # unused. Because targets are always resolved within `identity.channel`, a spoke cannot address a channel it
         # has not joined even if it names one here.
-        claimed = destination.get("channel")
-        if claimed is not None and claimed != identity.channel:
-            self._send(source, protocol.error(f"you are not on channel {claimed!r}"))
+        if destination.channel is not None and destination.channel != identity.channel:
+            self._send(source, protocol.error(f"you are not on channel {destination.channel!r}"))
             return
 
-        target_nickname = destination.get("nickname")
         message_id = protocol.new_ulid()
-
-        if target_nickname is None:
+        recipient = destination.to
+        if recipient is None:
             targets = self.members(identity.channel) - {source}
-        elif (target := self.by_name.get((identity.channel, target_nickname))) is not None:
-            targets = {target}
+            to_address = None
         else:
-            self._send(source, protocol.bounce(message_id, "no such nickname on this channel"))
-            return
+            # A recipient may be named by either locator. The handle is checked first: it identifies one connection
+            # and is never reused, whereas a nickname is only unique while its holder is connected.
+            target = None
+            if recipient.handle is not None:
+                candidate = recipient.handle.encode("ascii")
+                if candidate in self.handles and self.handles[candidate].channel == identity.channel:
+                    target = candidate
+            if target is None and recipient.nickname is not None:
+                target = self.by_name.get((identity.channel, recipient.nickname))
+            if target is None:
+                self._send(source, protocol.bounce(message_id, "no such recipient on this channel"))
+                return
+            targets = {target}
+            to_address = self.handles[target].address(target)
 
         envelope = protocol.envelope(
             channel=identity.channel,
-            sender=identity.nickname,
-            to=target_nickname,
+            sender=identity.address(source),
+            to=to_address,
             body=body.decode("utf-8", errors="replace"),
             msg_id=message_id,
         )
         for handle in targets:
-            if not self._send(handle, envelope) and target_nickname is not None:
+            if not self._send(handle, envelope) and recipient is not None:
                 # The recipient's handle became unreachable between target lookup and send. Only direct messages
                 # bounce: a broadcast that fails for one member still reached the others.
                 self._send(source, protocol.bounce(message_id, "recipient went away"))

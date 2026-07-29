@@ -1,27 +1,35 @@
-"""Wire protocol: envelopes, control messages, serialization.
+"""Wire protocol: addresses, envelopes, control messages, and canonical serialization.
 
-Everything on the wire is JSON. Two kinds of message travel between a spoke and
-the hub:
+Everything on the wire is JSON. Two kinds of message travel between a spoke and the hub:
 
-* **data** -- a spoke sends ``[dest_json][body]``; the hub delivers
-  ``[envelope_json]``.
-* **control** -- a single JSON frame with a ``kind`` field.
+* **data** -- a spoke sends `[destination JSON][body]`; the hub delivers `[envelope JSON]`.
+* **control** -- a single JSON frame with a `kind` field.
 
-Control messages are distinguished from envelopes by carrying ``"from": null``
-rather than by any reserved nickname or channel name. Nicknames and channel
-names are raw UTF-8 chosen by the user; the protocol reserves none of them.
+Control messages are told apart from envelopes by carrying `"from": null` rather than by a reserved nickname or
+channel name. Users may choose any string as a nickname, so the protocol reserves none.
+
+Two properties are deliberate and depended on elsewhere:
+
+**Serialization is canonical.** `dumps` sorts keys at every level and emits no insignificant whitespace, so the same
+content always produces the same bytes. Identical messages are therefore byte-identical, which is what makes a
+signature or content hash possible without renegotiating the format. Every frame and every inbox line goes through
+`dumps`; nothing serializes JSON by itself.
+
+**Participants are addressed by a structure, not a bare string.** An `Address` currently carries a nickname and a
+handle, and further locators can be added as fields without changing how anything is parsed. A bare string would have
+had to be reinterpreted to add one.
 """
 
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 # ULID -------------------------------------------------------------------
-# 128-bit identifier in Crockford base32: a 48-bit millisecond timestamp followed
-# by 80 random bits. Implemented here rather than taken as a dependency because it
-# is ~10 lines and the project's dependency set is limited to pyzmq and mcp.
+# 128-bit identifier in Crockford base32: a 48-bit millisecond timestamp followed by 80 random bits. Implemented
+# here rather than taken as a dependency because it is ~10 lines and the project's dependency set is limited to
+# pyzmq and mcp.
 
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
@@ -45,8 +53,16 @@ def utc_now() -> str:
 
 
 def dumps(obj: Any) -> bytes:
-    """Serialize a protocol object to a single frame."""
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    """Serialize to canonical JSON bytes.
+
+    Keys are sorted at every level and separators carry no spaces, so equal content serializes to equal bytes on any
+    machine and in any Python version. Non-ASCII is emitted as UTF-8 rather than `\\u` escapes, which keeps names
+    readable in the inbox files and keeps the byte sequence tied to the text rather than to an escaping choice.
+
+    Key order is by Unicode code point (Python's own string ordering) rather than the UTF-16 code unit order that
+    RFC 8785 specifies. The two agree for every key this protocol uses, all of which are ASCII.
+    """
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def loads(frame: bytes) -> Any:
@@ -57,57 +73,158 @@ def loads(frame: bytes) -> Any:
         raise ValueError(f"malformed frame: {exc}") from exc
 
 
-# Identity ---------------------------------------------------------------
+# Addresses --------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class Identity:
-    """Who a handle belongs to, as far as the hub is concerned."""
+@dataclass(frozen=True, slots=True)
+class Address:
+    """Where a message came from or is going.
+
+    Both locators are optional and identify the same participant by different means:
+
+    * `nickname` -- the name the user chose. Unique within a channel while its holder is connected, reusable
+      afterwards, and meaningful to a human.
+    * `handle` -- the ULID used as the ZMQ routing id. Unique for the lifetime of one connection and never reused,
+      so it stays unambiguous where a nickname would not.
+
+    A sender fills in whichever it knows; the hub fills in both, from its own table rather than from anything the
+    sender claimed.
+    """
+
+    nickname: str | None = None
+    handle: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_wire(cls, value: Any) -> Address | None:
+        """Parse an address field. Returns None for a missing or null one, which means "everybody"."""
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError(f"an address must be an object or null, got {type(value).__name__}")
+        nickname, handle = value.get("nickname"), value.get("handle")
+        for name, item in (("nickname", nickname), ("handle", handle)):
+            if item is not None and not isinstance(item, str):
+                raise ValueError(f"address {name} must be a string or null")
+        return cls(nickname=nickname, handle=handle)
+
+
+# Data messages ----------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Destination:
+    """Frame 0 of a data message: which channel, and who on it.
+
+    `to=None` broadcasts to the whole channel. The hub validates `channel` against the sender's registered channel
+    and otherwise ignores it; it is carried for logging and explicitness, never trusted.
+    """
 
     channel: str
-    nickname: str
+    to: Address | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"channel": self.channel, "to": self.to.to_wire() if self.to else None}
+
+    @classmethod
+    def from_wire(cls, value: Any) -> Destination:
+        if not isinstance(value, dict):
+            raise ValueError("a destination must be an object")
+        channel = value.get("channel")
+        if channel is not None and not isinstance(channel, str):
+            raise ValueError("destination channel must be a string or null")
+        return cls(channel=channel, to=Address.from_wire(value.get("to")))
 
 
-# Destination (spoke -> hub, frame 0 of a data message) -------------------
+@dataclass(frozen=True, slots=True)
+class Envelope:
+    """What the hub delivers to a recipient.
 
+    `to` is the recipient's address for a direct message and None for a broadcast. Recipients need the difference to
+    choose a reply mode: answering a broadcast privately, or a private message publicly, reaches the wrong people.
 
-def destination(channel: str, nickname: str | None = None) -> dict[str, Any]:
-    """Address a message. ``nickname=None`` broadcasts to the whole channel."""
-    return {"channel": channel, "nickname": nickname}
+    `sender` is filled in by the hub from its handle table, so a participant cannot claim to be somebody else.
+    """
 
+    id: str
+    channel: str
+    sender: Address
+    to: Address | None
+    ts: str
+    body: str
 
-# Envelope (hub -> spoke) ------------------------------------------------
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "body": self.body,
+            "channel": self.channel,
+            "from": self.sender.to_wire(),
+            "id": self.id,
+            "to": self.to.to_wire() if self.to else None,
+            "ts": self.ts,
+        }
+
+    @classmethod
+    def from_wire(cls, value: dict[str, Any]) -> Envelope:
+        sender = Address.from_wire(value.get("from"))
+        if sender is None:
+            raise ValueError("an envelope must name its sender")
+        return cls(
+            id=value["id"],
+            channel=value["channel"],
+            sender=sender,
+            to=Address.from_wire(value.get("to")),
+            ts=value["ts"],
+            body=value["body"],
+        )
 
 
 def envelope(
     *,
     channel: str,
-    sender: str,
-    to: str | None,
-    body: Any,
+    sender: Address,
+    to: Address | None,
+    body: str,
     msg_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build the envelope the hub delivers to a recipient.
+    """Build a delivered envelope, ready to serialize."""
+    return Envelope(
+        id=msg_id or new_ulid(),
+        channel=channel,
+        sender=sender,
+        to=to,
+        ts=utc_now(),
+        body=body,
+    ).to_wire()
 
-    ``to`` is the recipient's nickname for a direct message and None for a broadcast. Recipients need this to choose
-    a reply mode: replying to ``to=None`` with a direct message, or to a direct message with a broadcast, sends the
-    reply to the wrong set of participants.
 
-    ``sender`` must be supplied by the hub from its handle table, not from any field the sending spoke provided.
-    """
-    return {
-        "id": msg_id or new_ulid(),
-        "channel": channel,
-        "from": sender,
-        "to": to,
-        "ts": utc_now(),
-        "body": body,
-    }
+def destination(channel: str, to: Address | None = None) -> dict[str, Any]:
+    """Build a destination frame, ready to serialize. `to=None` broadcasts to the channel."""
+    return Destination(channel=channel, to=to).to_wire()
 
 
 def is_control(message: dict[str, Any]) -> bool:
     """True if this is a control message rather than a delivered envelope."""
     return message.get("from") is None and "kind" in message
+
+
+# Identity ---------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Identity:
+    """What the hub records for one handle."""
+
+    channel: str
+    nickname: str
+
+    def address(self, handle: bytes | str) -> Address:
+        """The full address of this participant, both locators filled in."""
+        return Address(
+            nickname=self.nickname,
+            handle=handle.decode("ascii") if isinstance(handle, bytes) else handle,
+        )
 
 
 # Control messages -------------------------------------------------------
@@ -116,13 +233,18 @@ def is_control(message: dict[str, Any]) -> bool:
 
 
 def whois() -> dict[str, Any]:
-    """Ask an unknown handle to identify itself. Sent by a hub with no table."""
+    """Ask an unregistered handle to identify itself. Sent by a hub with no entry for it."""
     return {"from": None, "kind": "whois"}
 
 
-def roster(channel: str, peers: list[str]) -> dict[str, Any]:
-    """Current membership of a channel. Updates the spoke's cache; not inboxed."""
-    return {"from": None, "kind": "roster", "channel": channel, "peers": peers}
+def roster(channel: str, peers: list[Address]) -> dict[str, Any]:
+    """Current membership of a channel. Cached by the spoke; not written to any inbox."""
+    return {
+        "from": None,
+        "kind": "roster",
+        "channel": channel,
+        "peers": [p.to_wire() for p in peers],
+    }
 
 
 def bounce(msg_id: str, reason: str) -> dict[str, Any]:
@@ -131,7 +253,7 @@ def bounce(msg_id: str, reason: str) -> dict[str, Any]:
 
 
 def error(reason: str) -> dict[str, Any]:
-    """Report that a request was refused. Written to the inbox unless it answers an in-flight ``hello``."""
+    """Report that a request was refused. Written to the inbox unless it answers an in-flight `hello`."""
     return {"from": None, "kind": "error", "reason": reason}
 
 
@@ -144,7 +266,7 @@ def channels(entries: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def hello(channel: str, nickname: str, reply_to: str) -> dict[str, Any]:
-    """Claim a (channel, nickname) for this handle."""
+    """Claim a (channel, nickname) pair for this handle."""
     return {
         "from": None,
         "kind": "hello",

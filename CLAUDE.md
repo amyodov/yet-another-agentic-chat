@@ -17,7 +17,8 @@ whenever you ship or defer something; it is the only record, as there is no sepa
 | **connection id** | The membership's handle, returned by `connect` and used to address it. |
 | **channel** | A named conversation. Addressing, not isolation. |
 | **nickname** | A user-chosen name within a channel. Raw UTF-8. |
-| **handle** | ULID used as the ZMQ `ROUTING_ID`. Never shown to the user. |
+| **handle** | ULID used as the ZMQ `ROUTING_ID`. Also a locator inside an address. |
+| **address** | `{nickname, handle}`. How participants are named on the wire — never a bare string. |
 
 "frontend" and "backend" are relative to the MCP tool surface, not web layers. "channel" always means a YAAC channel,
 never the Claude Code feature of the same name.
@@ -81,6 +82,19 @@ Absent on Claude Desktop. `connect` records it in the inbox descriptor; v0 does 
 and inbox, so the hub sees them as unrelated participants and no protocol change was needed. Tools take an optional
 `connection_id`; with one membership open it may be omitted, with several it is required rather than guessed. This
 matters for clients running one MCP server per application instead of per conversation, such as Claude Desktop.
+
+## Message format
+
+`protocol.dumps` is the only serializer. It sorts keys at every level and emits no insignificant whitespace, so equal
+content gives equal bytes and a message can be hashed or signed later without a format change. Do not call
+`json.dumps` anywhere else, and do not add a field whose value is not deterministically serializable.
+
+`from` and `to` are `Address` objects, not strings: `{nickname, handle}`, either of which may be null. A nickname is
+unique on a channel only while its holder is connected; a handle identifies one connection and is never reused. New
+locators can be added as fields without breaking parsers, which is why this is a structure rather than a string.
+
+`Address`, `Destination` and `Envelope` are frozen dataclasses with `to_wire`/`from_wire`. Parse with `from_wire`
+rather than reading dict keys directly — it rejects a malformed address instead of silently coercing it.
 
 ## Hard rules
 

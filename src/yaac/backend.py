@@ -37,6 +37,7 @@ from zmq.utils.monitor import parse_monitor_message
 from . import protocol
 from .hub import Hub
 from .inbox import Inbox
+from .protocol import Address
 
 DEFAULT_ENDPOINT = "tcp://127.0.0.1:19116"
 """19116 is 0x4AAC. Chosen below the ephemeral port range so the kernel will not assign it as the source port of an
@@ -97,7 +98,7 @@ class Membership:
         self.handle = protocol.new_ulid()
         self.channel = channel
         self.nickname = nickname
-        self.roster: list[str] = []
+        self.roster: list[Address] = []
         self.inbox: Inbox | None = None
 
         self.dealer: zmq.asyncio.Socket = backend.ctx.socket(zmq.DEALER)
@@ -142,9 +143,9 @@ class Membership:
                 "session_id": os.environ.get("CLAUDE_CODE_SESSION_ID"),
             }
         )
-        # The hub deletes a channel when its last member leaves, so a roster containing only this nickname means the
+        # The hub deletes a channel when its last member leaves, so a roster naming only this membership means the
         # channel did not exist before this call. Reported so the caller can catch a mistyped channel name.
-        return self.roster == [self.nickname]
+        return [p.handle for p in self.roster] == [self.handle]
 
     async def close(self) -> None:
         """Cancel this membership's tasks, close its sockets, and delete its inbox files."""
@@ -220,7 +221,9 @@ class Membership:
                 # Cached for `peers()`. Not written to the inbox: membership changes are not messages, and inboxing
                 # them would put a line into the agent's context every time any participant reconnected.
                 if message.get("channel") == self.channel:
-                    self.roster = list(message.get("peers", []))
+                    self.roster = [
+                        address for peer in message.get("peers", []) if (address := Address.from_wire(peer)) is not None
+                    ]
                     if self._hello_ack is not None and not self._hello_ack.done():
                         self._hello_ack.set_result(True)
             case "error":
@@ -241,13 +244,15 @@ class Membership:
 
     # -- operations ------------------------------------------------------
 
-    async def send(self, body: str, nickname: str | None = None) -> str:
+    async def send(self, body: str, nickname: str | None = None, handle: str | None = None) -> str:
         """Queue one message for the hub. Does not block.
 
-        `nickname=None` addresses every other member of the channel. Sent with NOBLOCK, so reaching SNDHWM raises
-        `zmq.Again` rather than waiting; blocking here would stall the MCP call and with it the user's session.
+        Naming neither a nickname nor a handle addresses every other member of the channel. Sent with NOBLOCK, so
+        reaching SNDHWM raises `zmq.Again` rather than waiting; blocking here would stall the MCP call and with it
+        the user's session.
         """
-        destination = protocol.dumps(protocol.destination(self.channel, nickname))
+        to = Address(nickname=nickname, handle=handle) if (nickname or handle) else None
+        destination = protocol.dumps(protocol.destination(self.channel, to))
         try:
             await self.dealer.send_multipart([destination, body.encode("utf-8")], zmq.NOBLOCK)
         except zmq.Again:
@@ -262,9 +267,13 @@ class Membership:
         """Number of unread messages, leaving the cursor where it is."""
         return self.inbox.pending_count() if self.inbox is not None else 0
 
-    def peers(self) -> list[str]:
-        """Nicknames on this channel other than this membership's own."""
-        return [p for p in self.roster if p != self.nickname]
+    def peers(self) -> list[Address]:
+        """Everyone else on this channel, from the cached roster."""
+        return [p for p in self.roster if p.handle != self.handle]
+
+    def peer_nicknames(self) -> list[str]:
+        """Just the names, for display."""
+        return [p.nickname for p in self.peers() if p.nickname is not None]
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -382,7 +391,7 @@ class Backend:
             channel=channel,
             nickname=nickname,
             created=created,
-            peers=membership.peers(),
+            peers=membership.peer_nicknames(),
         )
 
     async def disconnect(self, connection_id: str | None = None) -> Membership:

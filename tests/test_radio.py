@@ -29,7 +29,14 @@ async def radios(endpoint):
 async def heard(backend: Backend) -> list[tuple]:
     """What a radio has received, as (from, to, body) triples."""
     await asyncio.sleep(SETTLE)
-    return [(m.get("from"), m.get("to"), m.get("body")) for m in backend.resolve(None).receive()]
+    return [
+        (
+            (m.get("from") or {}).get("nickname"),
+            (m.get("to") or {}).get("nickname") if m.get("to") else None,
+            m.get("body"),
+        )
+        for m in backend.resolve(None).receive()
+    ]
 
 
 async def test_probing_reports_the_net_without_joining_it(radios):
@@ -59,7 +66,7 @@ async def test_joining_reports_creation_and_populates_both_rosters(radios):
     assert (second.created, second.peers) == (False, ["ann"])
 
     await asyncio.sleep(SETTLE)
-    assert b.resolve(None).peers() == ["ann"]
+    assert b.resolve(None).peer_nicknames() == ["ann"]
 
 
 @pytest.mark.parametrize(
@@ -99,7 +106,7 @@ async def test_undeliverable_messages_bounce_to_the_sender(radios, recipient, on
     [bounce] = a.resolve(None).receive()
     assert bounce["kind"] == "bounce"
     assert bounce["from"] is None
-    assert "no such nickname" in bounce["reason"]
+    assert "no such recipient" in bounce["reason"]
     if on_other_channel:
         # The hub takes the sender's channel from its own table, so speaking into
         # a channel you have not joined is structurally impossible.
@@ -129,8 +136,8 @@ async def test_a_body_is_delivered_verbatim_and_never_obeyed(radios, body):
 
     [received] = b.resolve(None).receive()
     assert received["body"] == body
-    assert received["from"] == "ann"
-    assert received["to"] == "bob"
+    assert received["from"]["nickname"] == "ann"
+    assert received["to"]["nickname"] == "bob"
     assert "kind" not in received
 
 
@@ -275,3 +282,30 @@ async def test_the_bind_is_released_when_the_last_membership_goes(radios):
     assert host.is_hub is True  # still one membership open
     await host.disconnect(second.connection_id)
     assert [host.is_hub, host.on_air] == [False, False]
+
+
+@pytest.mark.parametrize("locator", ["nickname", "handle"], ids=["by-nickname", "by-handle"])
+async def test_a_recipient_can_be_named_by_either_locator(radios, locator):
+    """A nickname is only unique while its holder is connected; a handle identifies one connection and is never
+    reused. Both must reach the same participant."""
+    a, b = radios(), radios()
+    await a.connect(FORUM, "ann")
+    target = await b.connect(FORUM, "bob")
+
+    keyword = {locator: "bob" if locator == "nickname" else target.connection_id}
+    await a.resolve(None).send("addressed precisely", **keyword)
+    assert await heard(b) == [("ann", "bob", "addressed precisely")]
+
+
+async def test_a_handle_from_another_channel_does_not_resolve(radios):
+    """Recipients are looked up within the sender's own channel, so a handle borrowed from elsewhere must bounce
+    rather than deliver across the boundary."""
+    a, b = radios(), radios()
+    await a.connect(FORUM, "ann")
+    elsewhere = await b.connect(OTHER, "bob")
+
+    await a.resolve(None).send("wrong channel", handle=elsewhere.connection_id)
+    await asyncio.sleep(SETTLE)
+    assert await heard(b) == []
+    [bounce] = a.resolve(None).receive()
+    assert bounce["kind"] == "bounce"

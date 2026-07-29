@@ -75,3 +75,21 @@ def test_a_corrupt_line_does_not_wedge_the_inbox(box):
 def test_reading_an_inbox_that_was_never_created_is_harmless(isolated_runtime):
     never = Inbox("01NEVERCREATED")
     assert [never.read_new(), never.pending_count()] == [[], 0]
+
+
+def test_lines_are_canonical_so_equal_content_gives_equal_bytes(box):
+    """The file is what a signature or content hash would be computed over, so the encoding must not depend on the
+    order the fields happened to be built in."""
+    box.append({"z": "last", "a": {"n": 2, "m": 1}, "body": "text"})
+    box.append({"body": "text", "a": {"m": 1, "n": 2}, "z": "last"})
+
+    first, second = box.log_path.read_text(encoding="utf-8").splitlines()
+    assert first == second
+    assert first == '{"a":{"m":1,"n":2},"body":"text","z":"last"}'
+
+
+def test_a_multiline_body_still_occupies_exactly_one_line(box):
+    body = "first\nsecond\n\nfourth"
+    box.append({"body": body})
+    assert len(box.log_path.read_text(encoding="utf-8").splitlines()) == 1
+    assert [m["body"] for m in box.read_new()] == [body]

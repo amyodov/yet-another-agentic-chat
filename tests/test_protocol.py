@@ -5,6 +5,7 @@ import time
 import pytest
 
 from yaac import protocol
+from yaac.protocol import Address, Destination, Envelope
 
 # Text that has broken naive implementations. Names are raw UTF-8 and are never
 # parsed, split, validated, or case-folded, so all of these must survive intact.
@@ -58,12 +59,12 @@ def test_ulid_properties():
 
 @AWKWARD_TEXT
 def test_arbitrary_text_survives_the_wire_unchanged(text):
-    destination = protocol.loads(protocol.dumps(protocol.destination(text, text)))
-    assert destination == {"channel": text, "nickname": text}
+    where = Destination.from_wire(protocol.loads(protocol.dumps(protocol.destination(text, Address(text, text)))))
+    assert where == Destination(channel=text, to=Address(nickname=text, handle=text))
 
-    envelope = protocol.envelope(channel=text, sender=text, to=text, body=text)
-    assert protocol.loads(protocol.dumps(envelope)) == envelope
-    assert (envelope["channel"], envelope["from"], envelope["to"], envelope["body"]) == (
+    sent = protocol.envelope(channel=text, sender=Address(text, "01H"), to=Address(text, "01T"), body=text)
+    restored = Envelope.from_wire(protocol.loads(protocol.dumps(sent)))
+    assert (restored.channel, restored.sender.nickname, restored.to.nickname, restored.body) == (
         text,
         text,
         text,
@@ -71,23 +72,23 @@ def test_arbitrary_text_survives_the_wire_unchanged(text):
     )
 
     # No nickname is reserved, so text that looks like control traffic is not.
-    assert protocol.is_control(envelope) is False
+    assert protocol.is_control(sent) is False
 
 
 @pytest.mark.parametrize(
     "to,expected",
-    [("bob", "bob"), (None, None)],
+    [(Address("bob", "01B"), {"handle": "01B", "nickname": "bob"}), (None, None)],
     ids=["direct", "broadcast"],
 )
 def test_envelope_records_how_it_was_addressed(to, expected):
-    # Recipients must tell the two apart: answering privately to something
-    # everyone heard, or the reverse, is a real failure mode.
-    envelope = protocol.envelope(channel="forum", sender="ann", to=to, body="hi")
-    assert envelope["to"] == expected
-    assert envelope["from"] == "ann"
-    assert envelope["channel"] == "forum"
-    assert len(envelope["id"]) == 26
-    assert envelope["ts"].endswith("Z")
+    # Recipients must tell the two apart: answering privately to something everyone heard, or the reverse, reaches
+    # the wrong people.
+    sent = protocol.envelope(channel="forum", sender=Address("ann", "01A"), to=to, body="hi")
+    assert sent["to"] == expected
+    assert sent["from"] == {"handle": "01A", "nickname": "ann"}
+    assert sent["channel"] == "forum"
+    assert len(sent["id"]) == 26
+    assert sent["ts"].endswith("Z")
 
 
 @pytest.mark.parametrize(
@@ -95,8 +96,16 @@ def test_envelope_records_how_it_was_addressed(to, expected):
     [
         (protocol.whois(), {"from": None, "kind": "whois"}),
         (
-            protocol.roster("forum", ["ann", "bob"]),
-            {"from": None, "kind": "roster", "channel": "forum", "peers": ["ann", "bob"]},
+            protocol.roster("forum", [Address("ann", "01A"), Address("bob", "01B")]),
+            {
+                "from": None,
+                "kind": "roster",
+                "channel": "forum",
+                "peers": [
+                    {"handle": "01A", "nickname": "ann"},
+                    {"handle": "01B", "nickname": "bob"},
+                ],
+            },
         ),
         (
             protocol.bounce("01J", "no such nickname on this channel"),
@@ -153,3 +162,49 @@ def test_malformed_frames_raise_valueerror(frame):
 
 def test_dumps_emits_utf8_rather_than_escapes():
     assert "日本語".encode() in protocol.dumps({"n": "日本語"})
+
+
+@AWKWARD_TEXT
+def test_serialization_is_canonical_so_equal_content_gives_equal_bytes(text):
+    """A byte-stable encoding is what a signature or content hash would be computed over, so insertion order must
+    not be able to change the result."""
+    fields = {"z": text, "a": {"n": 1, "m": text}, "body": text}
+    shuffled = {"body": text, "a": {"m": text, "n": 1}, "z": text}
+    assert protocol.dumps(fields) == protocol.dumps(shuffled)
+
+    encoded = protocol.dumps(fields).decode("utf-8")
+    assert encoded.index('"a"') < encoded.index('"body"') < encoded.index('"z"')  # sorted at the top level
+    assert encoded.index('"m"') < encoded.index('"n"')  # and at every level below
+    assert ", " not in encoded and ": " not in encoded  # no insignificant whitespace
+
+
+def test_an_envelope_serializes_to_one_line_whatever_the_body_contains():
+    body = 'first\nsecond\ttabbed\n\n"quoted" and \\backslash'
+    line = protocol.dumps(protocol.envelope(channel="forum", sender=Address("ann"), to=None, body=body))
+    assert line.count(b"\n") == 0  # newlines survive as escapes, so the JSONL framing holds
+    assert Envelope.from_wire(protocol.loads(line)).body == body
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, None),
+        ({"nickname": "ann", "handle": "01A"}, Address("ann", "01A")),
+        ({"nickname": "ann"}, Address("ann", None)),
+        ({"handle": "01A"}, Address(None, "01A")),
+        ({}, Address(None, None)),
+    ],
+    ids=["null", "both", "nickname-only", "handle-only", "empty"],
+)
+def test_addresses_accept_either_locator(value, expected):
+    assert Address.from_wire(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["a bare string", 42, ["list"], {"nickname": 42}, {"handle": []}],
+    ids=["string", "number", "list", "bad-nickname", "bad-handle"],
+)
+def test_a_malformed_address_is_rejected_rather_than_coerced(value):
+    with pytest.raises(ValueError):
+        Address.from_wire(value)

@@ -266,29 +266,49 @@ A file appears there only while a connection is open, and is deleted on
 ### Message format
 
 Each line of an inbox file is one complete JSON object, newline-terminated —
-**always exactly one line per message**, whatever the body contains. JSON escapes
-control characters, so a body with newlines in it still occupies a single physical
-line. `jq` and `wc -l` both do the obvious thing.
+**always exactly one line per message**, whatever the body contains, because JSON
+escapes control characters. `jq` and `wc -l` both do the obvious thing.
+
+The encoding is **canonical**: keys sorted at every level, no insignificant
+whitespace, UTF-8 rather than `\u` escapes. Equal content therefore always
+produces equal bytes, so a message has a stable identity that can be hashed or
+signed without renegotiating the format.
 
 ```json
-{"id":"01JZ...","channel":"z combinator forum","from":"Диман","to":"Колян","ts":"2026-07-29T14:32:05Z","body":"schema changed:\n  - field renamed to recipient_group"}
+{"body":"schema changed:\n  - renamed to recipient_group","channel":"z combinator forum","from":{"handle":"01JZ...","nickname":"Диман"},"id":"01JZ...","to":{"handle":"01JZ...","nickname":"Колян"},"ts":"2026-07-29T14:32:05Z"}
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `id` | ULID. Time-sortable, so lines sort chronologically. |
-| `channel` | Channel the message travelled on. |
-| `from` | Sender's nickname. Filled in by the relaying session, never by the sender. |
-| `to` | Recipient's nickname, or `null` if it was a broadcast. |
-| `ts` | UTC, second resolution. |
-| `body` | Whatever was sent, verbatim. Never parsed by YAAC. |
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `body` | string | Whatever was sent, verbatim. Never parsed by YAAC. |
+| `channel` | string | Channel the message travelled on. |
+| `from` | address | Who sent it. Filled in by the relaying session, never by the sender. |
+| `id` | string | ULID. Time-sortable, so lines sort chronologically. |
+| `to` | address or `null` | Recipient, or `null` if it was a broadcast. |
+| `ts` | string | UTC, second resolution. |
 
-Failures arrive in the same file and are distinguished by `"from": null` and a
-`kind`, rather than by any reserved nickname — every nickname is available to
-users, so none can be reserved for the protocol:
+An **address** is an object rather than a bare name, so a participant can be
+identified more than one way:
 
 ```json
-{"from":null,"kind":"bounce","id":"01JZ...","reason":"no such nickname on this channel"}
+{"handle": "01JZ...", "nickname": "Колян"}
+```
+
+- `nickname` — what the user chose. Unique on a channel only while its holder is
+  connected, and reusable afterwards.
+- `handle` — identifies one connection, never reused. Unambiguous where a
+  nickname is not.
+
+Either locator addresses a recipient when sending. Further locators can be added
+as fields later without changing how anything parses, which a bare string could
+not have allowed.
+
+Failures arrive in the same file, distinguished by `"from": null` plus a `kind`
+rather than by a reserved nickname — every nickname is available to users, so none
+can be reserved for the protocol:
+
+```json
+{"from":null,"id":"01JZ...","kind":"bounce","reason":"no such recipient on this channel"}
 ```
 
 Writers append whole lines, but a reader can still arrive mid-flush. Consume only
