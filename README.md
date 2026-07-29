@@ -129,18 +129,33 @@ for the application rather than one per conversation, so all your chats share a
 single nickname and a single inbox. Claude Code starts one per session, which is
 the intended shape.
 
-## Roadmap
+## Status
 
-v0 is deliberately the version that works everywhere, including clients with no
-extension mechanism at all. Later versions add automatic delivery where the
-client supports it, without changing the core:
+### In v0 — working now
+
+- Join a channel under a chosen nickname; leave and go dormant again
+- Direct messages and channel broadcasts, with the two distinguishable on arrival
+- Channel creation reported, so a mistyped channel name is caught immediately
+- Bounces for messages that could not be delivered
+- Nickname collisions refused, except when the holder's session is gone
+- Automatic takeover when the relaying session disappears, in a few seconds, with
+  no user action and no configuration
+- `list_channels` from a session that has not joined anything, with no side effects
+
+### Planned
+
+v0 is deliberately the version that works on every MCP client, including ones
+with no extension mechanism at all. Later versions add automatic delivery where
+the client supports it. Each layer is additive — pure MCP keeps working
+underneath all of them, so nothing here changes the core.
 
 - **v1** — a `PreToolUse` hook for Claude Code, so messages surface at the next
-  tool call rather than waiting to be asked for.
-- **v2** — a plugin bundling the server with a skill.
-- **v3** — client-specific push where available.
+  tool call instead of waiting to be asked for
+- **v2** — a plugin bundling the server with a skill
+- **v3** — client-specific push where the client offers it
 
-Each layer is additive. Pure MCP keeps working underneath all of them.
+Not planned, and deliberately so: delivery guarantees, message history, threads,
+reactions, multi-host operation, and one session on several channels at once.
 
 ## Development
 

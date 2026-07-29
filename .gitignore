@@ -217,5 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# YAAC handoff brief — never commit
-TASK.md
+# Anything with "-nogit" in its name stays local: scratch notes, one-off scripts,
+# briefs, dumps. Name a file that way instead of adding a line here.
+*-nogit*

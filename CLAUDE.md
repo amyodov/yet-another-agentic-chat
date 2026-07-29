@@ -2,6 +2,9 @@
 
 See `README.md` for what YAAC does. This file is about working on it.
 
+`README.md` also tracks features — what is in the current version and what is planned. Update its Status section
+whenever you ship or defer something; it is the only record, as there is no separate roadmap or issue tracker.
+
 ## Vocabulary
 
 | Term | Meaning |
@@ -29,6 +32,9 @@ src/yaac/
 ```
 
 Python 3.14+, `uv`, `ruff`. Dependencies are `pyzmq` and `mcp` — ask before adding another.
+
+To keep a file out of git, put `-nogit` in its name (`notes-nogit.md`, `probe-nogit.py`). `.gitignore` matches
+`*-nogit*`, so don't add per-file entries to it.
 
 Line length 120, code and prose alike. Use current syntax freely: `match`/`case`, walrus, PEP 758 `except A, B:`.
 Annotations are lazy in 3.14, so no `from __future__ import annotations`.
