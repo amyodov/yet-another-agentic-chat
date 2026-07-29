@@ -198,14 +198,16 @@ async def test_losing_the_hub_restores_itself_with_no_user_action(radios):
     assert await heard(b) == [("cid", "bob", "still alive?")]
 
 
-async def test_disconnect_returns_to_dormant_and_removes_its_files(radios, isolated_runtime):
-    a = radios()
+async def test_leaving_returns_to_dormant_and_drops_what_was_held(radios):
+    a, b = radios(), radios()
     await a.connect(FORUM, "ann")
-    assert [p.name for p in isolated_runtime.rglob("*") if p.suffix == ".jsonl"] != []
+    await b.connect(FORUM, "bob")
+    await b.resolve(None).send("unread when ann leaves", nickname="ann")
+    await asyncio.sleep(SETTLE)
+    assert a.resolve(None).pending_count() == 1
 
     await a.disconnect()
-    assert [a.on_air, a.is_hub] == [False, False]
-    assert [p for p in isolated_runtime.rglob("*") if p.is_file()] == []
+    assert [a.on_air, a.is_hub, a.memberships] == [False, False, {}]
 
 
 @pytest.mark.parametrize("operation", ["send", "receive", "peers"])
@@ -222,7 +224,7 @@ async def test_on_air_operations_refuse_while_dormant(radios, operation):
                 membership.peers()
 
 
-async def test_connecting_twice_is_refused_and_a_refusal_leaves_no_trace(radios, isolated_runtime):
+async def test_connecting_twice_is_refused_and_a_refusal_leaves_no_trace(radios):
     radio = radios()
     await radio.connect(FORUM, "ann")
     with pytest.raises(ConnectionRefused, match="already on"):
@@ -231,8 +233,8 @@ async def test_connecting_twice_is_refused_and_a_refusal_leaves_no_trace(radios,
     loser = radios()
     with pytest.raises(ConnectionRefused, match="taken"):
         await loser.connect(FORUM, "ann")
-    assert loser.on_air is False
-    assert len([p for p in isolated_runtime.rglob("*") if p.suffix == ".jsonl"]) == 1
+    # A refused join must leave the backend exactly as dormant as it was.
+    assert [loser.on_air, loser.is_hub, loser.memberships] == [False, False, {}]
 
 
 async def test_one_process_holds_several_memberships_independently(radios):

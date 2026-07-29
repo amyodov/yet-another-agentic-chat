@@ -31,7 +31,6 @@ src/yaac/
   backend.py    sockets, bind election, receive loops, connection state
   hub.py        routing table, whois, roster, bounce
   protocol.py   envelope + control messages, serialization
-  inbox.py      jsonl + cursor + flock
 ```
 
 Python 3.14+, `uv`, `ruff`. Dependencies are `pyzmq` and `mcp` — ask before adding another.
@@ -74,8 +73,8 @@ Delivery is pull-only, so the tool descriptions have to carry the reminder to ca
 **Binding a busy port fails in ~0.4 ms** with `EADDRINUSE`. That is why every backend can just try.
 
 **`CLAUDE_CODE_SESSION_ID` is visible to both the MCP server and hooks**, and equals the `session_id` a hook gets on
-stdin. Better key than the cwd for a future out-of-process reader, since it separates two sessions in one directory.
-Absent on Claude Desktop. `connect` records it in the inbox descriptor; v0 does not use it.
+stdin. Better key than the cwd if v1 ever needs an out-of-process reader to find the right session, since it
+separates two sessions in one directory. Absent on Claude Desktop. Nothing uses it today.
 
 
 **Several memberships per process.** `Backend` holds a dict of `Membership`, each with its own handle, DEALER, roster
@@ -116,7 +115,9 @@ Each has a test.
 
 1. **Nothing is written to stdout.** It carries the stdio transport; one `print()` breaks the session with a parse
    error. Log to stderr via `backend.log`.
-2. **A dormant server opens no socket and creates no file.** `Backend` is not constructed until `join_channel`.
+2. **Nothing is ever written to disk, and a dormant server opens no socket.** Unread messages, rosters and
+   membership all live in memory and die with the process, so there is nothing to clean up after a crash.
+   `Backend` is not constructed at all until `join_channel`.
 3. **`send` never blocks.** A full queue or absent peer must raise. Blocking inside an MCP call freezes the session.
 4. **Nicknames and channel names are never parsed, split, validated, or case-folded.** That is why routing uses a
    separate opaque handle: `ROUTING_ID` has length and byte constraints that user-chosen names must not inherit.

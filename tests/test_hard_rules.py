@@ -93,30 +93,35 @@ async def test_startup_writes_only_json_rpc_to_stdout(endpoint):
     assert b"[yaac]" in stderr
 
 
-async def test_a_dormant_server_creates_no_files_and_opens_no_sockets(endpoint, isolated_runtime, tmp_path):
-    """YAAC is installed in every session the user has. Almost all of them must
-    stay completely inert: a switched-off radio leaves no trace."""
-    runtime = tmp_path / "dormant-runtime"
+async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint, tmp_path):
+    """YAAC keeps everything in memory. Nothing it holds should outlive the process, however the process ends, so
+    there is nothing to clean up after a crash and nothing to leak between sessions."""
+    runtime = tmp_path / "runtime"
     runtime.mkdir()
     requests = HANDSHAKE + [
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "peers", "arguments": {}}},
         {
             "jsonrpc": "2.0",
-            "id": 3,
+            "id": 4,
             "method": "tools/call",
-            "params": {"name": "peers", "arguments": {}},
-        }
+            "params": {"name": "join_channel", "arguments": {"channel": "forum", "nickname": "ann"}},
+        },
+        {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "check_inbox", "arguments": {}}},
     ]
     stdout, _ = await run_server(
         endpoint,
         requests,
         env={
             "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path),
+            "TMPDIR": str(runtime),
             "XDG_RUNTIME_DIR": str(runtime),
             "PYTHONPATH": str(REPO / "src"),
         },
     )
-    # The server really did run and answer, and still left nothing behind.
-    assert [m.get("id") for m in decode(stdout)] == [1, 2, 3]
+    # The server really did run, go on air, and answer -- and still wrote nothing anywhere it could reach.
+    assert [m["id"] for m in decode(stdout) if "id" in m] == [1, 2, 3, 4, 5]
+    assert list(runtime.rglob("*")) == []
     assert list(runtime.iterdir()) == []
 
 

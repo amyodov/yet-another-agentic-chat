@@ -267,20 +267,23 @@ uv run pytest                                  # ~20 s
 uv run ruff check . && uv run ruff format .
 ```
 
-The message log is a plain JSONL file, one envelope per line, so the debugger of
-first resort is:
+**YAAC writes no files at all.** Everything — unread messages, rosters, who is on
+which channel — lives in memory and dies with the process. There is nothing to
+clean up after a crash, nothing to leak between sessions, and nothing to find on
+disk. Unread messages are lost if a session exits before collecting them, which is
+consistent with a v0 that makes no delivery guarantees.
 
-```bash
-tail -f "${XDG_RUNTIME_DIR:-/tmp}/yaac/inbox/"*.jsonl
+Each session logs to stderr, which your client will show as MCP server output:
+
 ```
-
-A file appears there only while a connection is open, and is deleted on
-`disconnect`, so an empty directory means nothing is on air.
+[yaac] won the bind: this session is now the hub on tcp://127.0.0.1:19116
+[yaac] hello: 'Колян' on 'z combinator forum' as b'01JZ...'
+[yaac] on air as 'Колян' on 'z combinator forum' (spoke)
+```
 
 ### Message format
 
-Every YAAC message — on the wire and in the inbox files — begins with the same nine
-bytes:
+Every YAAC message begins with the same nine bytes:
 
 ```
 {"yaac":1
@@ -318,10 +321,6 @@ always produces the same bytes, whatever order the fields were built in. So a
 message has one identity, which could be hashed or signed later without changing
 the format.
 
-Each line is one complete JSON object, newline-terminated — **always exactly one
-line per message**, whatever the body contains, because JSON escapes control
-characters. `jq` and `wc -l` both do the obvious thing.
-
 An **address** is an object rather than a bare name, so a participant can be
 identified more than one way:
 
@@ -338,21 +337,17 @@ Either locator addresses a recipient when sending. Further locators can be added
 as fields later without changing how anything parses, which a bare string could
 not have allowed.
 
-Failures arrive in the same file, distinguished by `"from": null` plus a `kind`
-rather than by a reserved nickname — every nickname is available to users, so none
-can be reserved for the protocol:
+Failures arrive through the same path, distinguished by `"from": null` plus a
+`kind` rather than by a reserved nickname — every nickname is available to users,
+so none can be reserved for the protocol:
 
 ```json
 {"yaac":1,"kind":"bounce","id":"01JZ…","from":null,"reason":"no such recipient on this channel"}
 ```
 
-Writers append whole lines, but a reader can still arrive mid-flush. Consume only
-up to the last newline and leave the remainder for next time; that is what
-`check_inbox` does.
-
-On the wire it is not line-based at all — ZMQ frames carry explicit lengths, so a
-message is `[destination JSON][body]` going out and `[envelope JSON]` coming back,
-with no delimiter and no escaping.
+Nothing here is line-delimited: ZMQ frames carry explicit lengths, so a message is
+`[destination JSON][body]` going out and `[envelope JSON]` coming back, with no
+delimiter and no escaping needed to separate one message from the next.
 
 ## Licence
 

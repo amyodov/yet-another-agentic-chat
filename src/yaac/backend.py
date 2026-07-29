@@ -24,7 +24,6 @@ States:
 
 import asyncio
 import contextlib
-import os
 import random
 import sys
 from dataclasses import dataclass
@@ -36,7 +35,6 @@ from zmq.utils.monitor import parse_monitor_message
 
 from . import protocol
 from .hub import Hub
-from .inbox import Inbox
 from .protocol import Address
 
 DEFAULT_ENDPOINT = "tcp://127.0.0.1:19116"
@@ -99,7 +97,9 @@ class Membership:
         self.channel = channel
         self.nickname = nickname
         self.roster: list[Address] = []
-        self.inbox: Inbox | None = None
+        # Messages wait here until check_inbox collects them. In memory, so this membership leaves nothing behind
+        # when the process exits, however it exits.
+        self.inbox: list[dict[str, Any]] = []
 
         self.dealer: zmq.asyncio.Socket = backend.ctx.socket(zmq.DEALER)
         # ROUTING_ID must be set before connect(); libzmq ignores later changes. It is a generated ULID rather than
@@ -116,7 +116,7 @@ class Membership:
     # -- lifecycle -------------------------------------------------------
 
     async def open(self) -> bool:
-        """Connect, announce, and create the inbox. Returns True if this membership created the channel."""
+        """Connect and announce. Returns True if this membership brought the channel into being."""
         self.dealer.connect(self.backend.endpoint)
         self._spawn(self._pump_dealer(), f"yaac-dealer-{self.handle}")
         self._spawn(self._monitor_loop(), f"yaac-monitor-{self.handle}")
@@ -130,25 +130,12 @@ class Membership:
         finally:
             self._hello_ack = None
 
-        self.inbox = Inbox(self.handle)
-        self.inbox.create(
-            {
-                "handle": self.handle,
-                "channel": self.channel,
-                "nickname": self.nickname,
-                "pid": os.getpid(),
-                "cwd": os.getcwd(),
-                # Present under Claude Code, absent under Claude Desktop and most other clients. Recorded for a
-                # future out-of-process reader; nothing in v0 depends on it.
-                "session_id": os.environ.get("CLAUDE_CODE_SESSION_ID"),
-            }
-        )
         # The hub deletes a channel when its last member leaves, so a roster naming only this membership means the
         # channel did not exist before this call. Reported so the caller can catch a mistyped channel name.
         return [p.handle for p in self.roster] == [self.handle]
 
     async def close(self) -> None:
-        """Cancel this membership's tasks, close its sockets, and delete its inbox files."""
+        """Cancel this membership's tasks and close its sockets."""
         for task in list(self._tasks):
             task.cancel()
         for task in list(self._tasks):
@@ -158,9 +145,7 @@ class Membership:
 
         for sock in (self.monitor, self.dealer):
             sock.close()
-        if self.inbox is not None:
-            self.inbox.destroy()
-            self.inbox = None
+        self.inbox.clear()
 
     def _spawn(self, coro, name: str) -> asyncio.Task:
         task = asyncio.create_task(coro, name=name)
@@ -239,8 +224,7 @@ class Membership:
                 log(f"ignoring control message {other!r} from the hub")
 
     def _append(self, message: dict[str, Any]) -> None:
-        if self.inbox is not None:
-            self.inbox.append(message)
+        self.inbox.append(message)
 
     # -- operations ------------------------------------------------------
 
@@ -260,12 +244,13 @@ class Membership:
         return protocol.new_ulid()
 
     def receive(self) -> list[dict[str, Any]]:
-        """Return messages appended since the last call and advance the inbox cursor past them."""
-        return self.inbox.read_new() if self.inbox is not None else []
+        """Take everything received since the last call, emptying the inbox."""
+        collected, self.inbox = self.inbox, []
+        return collected
 
     def pending_count(self) -> int:
-        """Number of unread messages, leaving the cursor where it is."""
-        return self.inbox.pending_count() if self.inbox is not None else 0
+        """How many messages are waiting, without taking them."""
+        return len(self.inbox)
 
     def peers(self) -> list[Address]:
         """Everyone else on this channel, from the cached roster."""
