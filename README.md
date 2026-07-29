@@ -120,6 +120,14 @@ participants at the transport level, so you never receive another channel's
 messages; but the relaying session sees everything. On one machine under one
 user account this is fine. Do not treat it as more than it is.
 
+**Messages become context in the receiving session.** Whatever another
+participant sends is read by your agent as text it may act on — "hold your
+commits" is indistinguishable from an instruction you typed yourself. The hub
+never parses a body, so nobody can forge the protocol or another nickname, but
+nothing prevents a body from *reading* as an instruction. Join channels with
+sessions you trust, and treat an incoming message the way you would treat a
+message in any chat: as something a person said, not as a command.
+
 **One channel per session.** A session holds one membership at a time.
 
 **Local only.** `127.0.0.1`. No multi-host, no authentication, no encryption.

@@ -1,7 +1,7 @@
 [project]
 name = "yet-another-agentic-chat"
 version = "0.1.0"
-description = "A radio for Claude Code sessions: zero-infrastructure messaging between concurrent agentic sessions."
+description = "YAAC: Yet Another Agentic Chat. A zero-infrastructure MCP messaging between concurrent agentic sessions."
 readme = "README.md"
 license = "MIT"
 authors = [
