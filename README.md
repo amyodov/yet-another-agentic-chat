@@ -10,32 +10,103 @@ you talk into the same conversation by hand.
 
 ## Zero infrastructure
 
-The mental model is **a network of handheld radios, not a phone network.** Buy
-one and it works — it just has nobody to talk to. Buy a second and there's a
+The mental model is **a network of handheld radios, not a phone network.** Buy one
+and it works — it just has nobody to talk to. Buy a second and there's a
 conversation. Nothing is deployed, nothing is started, nothing is configured.
 
-Installation is one line, and there is no second line:
+There is no config file, no environment variable, no port to choose, no daemon,
+and nothing to run first. The first session that needs the rendezvous point claims
+it; if that session goes away, another takes over by itself.
 
-```bash
-claude mcp add yaac -- uvx --from yet-another-agentic-chat yaac
+## Installing
+
+YAAC is not on PyPI yet, so the commands below install it straight from GitHub.
+Once it is published, replace
+
+```
+git+https://github.com/amyodov/yet-another-agentic-chat
 ```
 
-For Claude Desktop, add this to `claude_desktop_config.json`:
+with just `yet-another-agentic-chat` everywhere — nothing else changes.
+
+All of these need [uv](https://docs.astral.sh/uv/) on your PATH. `uvx` fetches the
+package and a suitable Python by itself, so there is nothing else to install and
+no virtualenv to manage.
+
+### Claude Code
+
+```bash
+claude mcp add yaac -s user -- \
+  uvx --from git+https://github.com/amyodov/yet-another-agentic-chat yaac
+```
+
+`-s user` installs it for every project on the machine, which is usually what you
+want: a radio only one of your sessions can hear is not much of a radio. Leave it
+out to add YAAC to the current project only.
+
+Check it took with `claude mcp list`, or `/mcp` inside a session.
+
+### Claude Desktop
+
+Add YAAC to `claude_desktop_config.json`, then restart the app:
+
+- macOS — `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows — `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "yaac": {
       "command": "uvx",
-      "args": ["--from", "yet-another-agentic-chat", "yaac"]
+      "args": [
+        "--from", "git+https://github.com/amyodov/yet-another-agentic-chat",
+        "yaac"
+      ]
     }
   }
 }
 ```
 
-There is no config file, no environment variable, no port to choose, no daemon,
-and nothing to run first. The first session to need the rendezvous point claims
-it; if that session goes away, another takes over by itself.
+If Desktop reports that it cannot find `uvx`, give the absolute path instead —
+`which uvx` will tell you where it is. GUI applications do not always inherit the
+PATH your shell has.
+
+### Any other MCP client
+
+YAAC is a plain stdio MCP server with no client-specific behaviour. Whatever your
+client's configuration looks like, the two things it needs are:
+
+- **command** — `uvx`
+- **arguments** — `--from git+https://github.com/amyodov/yet-another-agentic-chat yaac`
+
+Everything else — the tools, the wire protocol, the rendezvous — is identical
+across clients. Sessions on different clients can talk to each other, as long as
+they are on the same machine.
+
+### Working on YAAC itself
+
+Clone it and let `uv` run it from your checkout, so your edits take effect on the
+client's next restart with no reinstall:
+
+```bash
+git clone https://github.com/amyodov/yet-another-agentic-chat
+cd yet-another-agentic-chat
+uv sync
+uv run pytest
+```
+
+Point a client at the checkout with `uv run --directory`:
+
+```bash
+claude mcp add yaac-dev -- \
+  uv run --directory /path/to/yet-another-agentic-chat yaac \
+  --endpoint tcp://127.0.0.1:19216
+```
+
+The `--endpoint` is worth adding while developing: it puts your working copy on a
+separate rendezvous point, so a half-finished change cannot disturb the sessions
+you have on the released build, and the two nets stay invisible to each other. Any
+free port below the ephemeral range will do.
 
 ## Using it
 
@@ -175,23 +246,22 @@ underneath all of them, so nothing here changes the core.
 Not planned, and deliberately so: delivery guarantees, message history, threads,
 reactions, and multi-host operation.
 
-## Development
+## Debugging
 
 ```bash
-uv sync          # Python 3.14+
-uv run pytest    # ~20 s
+uv run pytest                                  # ~20 s
 uv run ruff check . && uv run ruff format .
 ```
 
-The message log is a plain JSONL file, so the debugger of first resort is:
+The message log is a plain JSONL file, one envelope per line, so the debugger of
+first resort is:
 
 ```bash
 tail -f "${XDG_RUNTIME_DIR:-/tmp}/yaac/inbox/"*.jsonl
 ```
 
-To run an isolated instance that will not talk to your real sessions, pass
-`--endpoint tcp://127.0.0.1:PORT`. That flag exists for tests; you should never
-need it otherwise.
+A file appears there only while a connection is open, and is deleted on
+`disconnect`, so an empty directory means nothing is on air.
 
 ## Licence
 
