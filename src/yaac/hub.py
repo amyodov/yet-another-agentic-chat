@@ -143,9 +143,9 @@ class Hub:
         match rest:
             case [single]:
                 try:
-                    message = protocol.loads(single)
+                    message = protocol.parse(single)
                 except ValueError as exc:
-                    self.log(f"dropping malformed control frame from {source!r}: {exc}")
+                    self.log(f"dropping unreadable control frame from {source!r}: {exc}")
                     return
                 self._control(source, message)
             case [dest_frame, body]:
@@ -215,9 +215,9 @@ class Hub:
             return
 
         try:
-            destination = protocol.Destination.from_wire(protocol.loads(dest_frame))
+            destination = protocol.Destination.from_wire(protocol.parse(dest_frame))
         except ValueError as exc:
-            self.log(f"dropping malformed destination from {source!r}: {exc}")
+            self.log(f"dropping unreadable destination from {source!r}: {exc}")
             return
 
         # `channel` in the destination frame is checked against the sender's registered channel and otherwise

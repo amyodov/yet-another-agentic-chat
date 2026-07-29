@@ -86,16 +86,22 @@ matters for clients running one MCP server per application instead of per conver
 ## Message format
 
 `protocol.dumps` is the only serializer. It stamps `yaac: PROTOCOL_VERSION` on every top-level dict and writes
-fields in `FIELD_ORDER` — not alphabetically — so every message starts with the literal bytes `{"yaac":1,`. That is a
-magic number: a reader identifies a YAAC message and its version from the first ten bytes without parsing. The rest
+fields in `FIELD_ORDER` — not alphabetically — so every message starts with the literal bytes `{"yaac":1`. That is a
+magic number: a reader identifies a YAAC message and its version from the first nine bytes without parsing. No
+trailing comma is claimed — a message with no other field ends right after the version. The rest
 of the header follows in fixed order and `body` is always last, so `head -c` on a log shows routing even when bodies
 are long.
 
 Fixed order also makes the bytes stable: equal content gives equal bytes, so a message has one identity to hash or
 sign later. Nothing computes a signature today.
 
-Do not call `json.dumps` anywhere else — the stamp must not be forgettable. Add new fields to `FIELD_ORDER`, and bump
-`PROTOCOL_VERSION` when a change would confuse an older reader.
+Received frames go through `protocol.parse`, which rejects anything whose `yaac` field is not exactly this build's
+version — checking the parsed field, not the leading bytes, because that is what the format guarantees. The byte
+prefix is for tools inspecting a stream. `type(version) is not int` rather than `!=`, since `1.0` and `True` both
+equal `1` in Python.
+
+Do not call `json.dumps` anywhere else — the stamp must not be forgettable. Use `parse`, not `loads`, on anything
+received. Add new fields to `FIELD_ORDER`, and bump `PROTOCOL_VERSION` when a change would confuse an older reader.
 
 `from` and `to` are `Address` objects, not strings: `{nickname, handle}`, either of which may be null. A nickname is
 unique on a channel only while its holder is connected; a handle identifies one connection and is never reused. New

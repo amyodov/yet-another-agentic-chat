@@ -201,9 +201,9 @@ class Membership:
             except zmq.ZMQError, asyncio.CancelledError:
                 return
             try:
-                message = protocol.loads(frame)
+                message = protocol.parse(frame)
             except ValueError as exc:
-                log(f"dropping malformed frame from the hub: {exc}")
+                log(f"dropping unreadable frame from the hub: {exc}")
                 continue
             self._deliver(message)
 
@@ -353,7 +353,7 @@ class Backend:
                 except TimeoutError:
                     return None
                 with contextlib.suppress(ValueError):
-                    if (message := protocol.loads(frame)).get("kind") == "channels":
+                    if (message := protocol.parse(frame)).get("kind") == "channels":
                         return message.get("channels", [])
             return None
         finally:

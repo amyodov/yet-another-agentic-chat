@@ -14,12 +14,18 @@ Two properties are deliberate and depended on elsewhere:
 `FIELD_ORDER`, not alphabetically, and stamps every message with the protocol version first. Every YAAC message
 therefore begins with the same literal bytes:
 
-    {"yaac":1,
+    {"yaac":1
 
 which is a magic number: a reader can recognise a YAAC message, and tell which protocol version wrote it, from the
-first ten bytes, without parsing. The rest of the header -- `kind`, `id`, `ts`, `channel`, `from`, `to` -- follows in
-a fixed order too, so `head -c 200` on a log shows the routing of every message even when the bodies are long.
-`body` is always last for that reason.
+first nine bytes, without parsing. There is deliberately no comma in that claim -- a message carrying no other field
+would end immediately after the version, so the format cannot promise one.
+
+Receivers check the parsed `yaac` field, not the leading bytes; `parse` does this and rejects anything else. The
+byte prefix is for tools inspecting a stream, not the validation rule.
+
+The rest of the header -- `kind`, `id`, `ts`, `channel`, `from`, `to` -- follows in a fixed order too, so
+`head -c 200` on a log shows the routing of every message even when the bodies are long. `body` is always last for
+that reason.
 
 Field order being fixed also makes the encoding byte-stable: equal content produces equal bytes regardless of the
 order fields were built in, so a message has a stable identity to hash or sign. Every frame and every inbox line
@@ -65,8 +71,12 @@ def utc_now() -> str:
 PROTOCOL_VERSION = 1
 """Stamped onto every message as its first field. Bump when a change would confuse an older reader."""
 
-MAGIC = b'{"yaac":1,'
-"""The bytes every serialized message starts with. Recognises a YAAC message and its version without parsing."""
+MAGIC = b'{"yaac":1'
+"""What a version 1 message starts with. No trailing comma: a message carrying no other field would end right here,
+so the comma is not something the format can promise."""
+
+MAGIC_PREFIX = b'{"yaac":'
+"""Version-agnostic prefix, for a reader that wants to recognise a YAAC message before deciding it can read it."""
 
 FIELD_ORDER = (
     "yaac",  # magic and version, always first
@@ -126,11 +136,29 @@ def dumps(obj: Any) -> bytes:
 
 
 def loads(frame: bytes) -> Any:
-    """Deserialize a single frame. Raises ValueError on malformed input."""
+    """Deserialize a single frame without checking its version. Raises ValueError on malformed input."""
     try:
         return json.loads(frame.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"malformed frame: {exc}") from exc
+
+
+def parse(frame: bytes) -> Any:
+    """Deserialize a received frame and reject anything this build cannot read.
+
+    Checking the parsed `yaac` field rather than the leading bytes is deliberate: it is what the format actually
+    guarantees. The byte prefix is a convenience for tools looking at a stream, not the rule -- whitespace or a
+    different serializer would defeat it while leaving the message perfectly valid.
+    """
+    message = loads(frame)
+    if not isinstance(message, dict):
+        raise ValueError(f"expected an object, got {type(message).__name__}")
+    version = message.get("yaac")
+    # An exact integer, so 1.0 and True -- both of which equal 1 in Python -- are rejected rather than accepted as
+    # version 1 by accident.
+    if type(version) is not int or version != PROTOCOL_VERSION:
+        raise ValueError(f"unsupported protocol version {version!r}, this build speaks {PROTOCOL_VERSION}")
+    return message
 
 
 # Addresses --------------------------------------------------------------

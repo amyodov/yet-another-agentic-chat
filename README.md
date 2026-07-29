@@ -265,15 +265,21 @@ A file appears there only while a connection is open, and is deleted on
 
 ### Message format
 
-Every YAAC message — on the wire and in the inbox files — begins with the same ten
+Every YAAC message — on the wire and in the inbox files — begins with the same nine
 bytes:
 
 ```
-{"yaac":1,
+{"yaac":1
 ```
 
 That is a magic number and a version in one. A reader can tell a YAAC message from
 anything else, and tell which protocol version wrote it, without parsing a thing.
+Note there is no comma in that guarantee: a message carrying nothing but the
+version would end right there, so the format does not promise one.
+
+Receivers do not check those bytes, though — they check the parsed `yaac` field,
+which is what the format actually guarantees. A message with a version this build
+cannot read is dropped with a logged reason rather than misinterpreted.
 
 After it the header follows in a **fixed order**, with `body` always last, so
 `head -c 200` on a log shows the routing of every message however long the bodies

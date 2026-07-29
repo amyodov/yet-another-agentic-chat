@@ -1,5 +1,6 @@
 """Wire protocol: identifiers, serialization, and message shapes."""
 
+import json
 import time
 
 import pytest
@@ -193,8 +194,39 @@ def test_serialization_is_byte_stable_whatever_order_fields_were_built_in(text):
 )
 def test_every_message_begins_with_the_magic_number(message):
     """A reader can identify a YAAC message, and the version that wrote it, from the first bytes alone."""
-    assert protocol.dumps(message).startswith(MAGIC)
-    assert protocol.loads(protocol.dumps(message))["yaac"] == PROTOCOL_VERSION
+    encoded = protocol.dumps(message)
+    assert encoded.startswith(MAGIC)
+    assert encoded.startswith(protocol.MAGIC_PREFIX)
+    assert protocol.parse(encoded)["yaac"] == PROTOCOL_VERSION
+
+
+def test_the_magic_claims_no_trailing_comma():
+    """A message carrying nothing but the version would end right after it, so the comma cannot be promised."""
+    assert MAGIC == b'{"yaac":1'
+    assert protocol.dumps({}) == b'{"yaac":1}'
+    assert protocol.dumps({}).startswith(MAGIC)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [{}, {"yaac": 2}, {"yaac": 0}, {"yaac": "1"}, {"yaac": None}, {"yaac": 1.0}, {"yaac": True}],
+    ids=["missing", "newer", "older", "string", "null", "float", "bool"],
+)
+def test_a_frame_this_build_cannot_read_is_rejected(message):
+    """Validation reads the parsed field rather than the leading bytes: that is what the format guarantees."""
+    frame = json.dumps(message).encode("utf-8")
+    with pytest.raises(ValueError, match="unsupported protocol version"):
+        protocol.parse(frame)
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [b'"a string"', b"[1,2]", b"42", b"null"],
+    ids=["string", "list", "number", "null"],
+)
+def test_a_frame_that_is_not_an_object_is_rejected(frame):
+    with pytest.raises(ValueError):
+        protocol.parse(frame)
 
 
 def test_the_header_precedes_the_body_in_a_fixed_order():
