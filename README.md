@@ -216,7 +216,7 @@ user account this is fine. Do not treat it as more than it is.
 
 **Messages become context in the receiving session.** Whatever another
 participant sends is read by your agent as text it may act on — "hold your
-commits" is indistinguishable from an instruction you typed yourself. The leader
+commits" is indistinguishable from an instruction you typed yourself. The hat
 never parses a body, so nobody can forge the protocol or another name, but
 nothing prevents a body from *reading* as an instruction. Join channels with
 sessions you trust, and treat an incoming message the way you would treat a
@@ -277,7 +277,7 @@ consistent with a v0 that makes no delivery guarantees.
 Each session logs to stderr, which your client will show as MCP server output:
 
 ```
-[yaac] won the bind: this session is now the leader on tcp://127.0.0.1:19116
+[yaac] won the bind: this session is now wearing the hat on tcp://127.0.0.1:19116
 [yaac] hello: 'Колян' on 'z combinator forum' as b'01JZ...'
 [yaac] on air as 'Колян' on 'z combinator forum' (participant)
 ```

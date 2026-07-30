@@ -1,21 +1,24 @@
-"""The leader: routing table, whois, roster, bounce.
+"""The hat: routing table, whois, roster, bounce.
 
-Run by whichever backend succeeded in binding the endpoint. All state in this class is in memory and derivable from
-the connected peers: a replacement leader rebuilds it from the ``hello`` messages participants send on reconnect,
-so nothing is persisted and no handover protocol is needed.
+Worn by whichever backend won the bind. The hat confers the job of passing everyone else's messages along and nothing
+else -- no policy, no configuration, no say over what participants may do. It is put on by getting there first and
+comes off when the process exits; the next backend to win the bind picks it up.
 
-Routing decisions use only the destination frame and the routing_id table. Message bodies are passed through as opaque
-bytes; no method here parses or branches on a body.
+All state here is in memory and derivable from the connected peers, so a fresh hat rebuilds it from the ``hello``
+messages participants send on reconnect. Nothing is persisted and there is no handover protocol.
+
+Routing uses only the destination frame and the routing-id table. Bodies pass through as opaque bytes; no method here
+parses or branches on one.
 
 Peer liveness without ``ROUTER_NOTIFY``: that option is part of the libzmq draft API and released pyzmq wheels bundle
 libzmq built without draft support, so ``setsockopt`` rejects it with ``EINVAL``. Two standard mechanisms replace it:
 
 * arrival -- each participant re-sends ``hello`` when its DEALER monitor reports ``EVENT_CONNECTED``, which also fires
-  after a leader changeover, so the new leader is told who is present without asking;
-* departure -- ``ROUTER_MANDATORY`` makes ``send_multipart`` raise ``EHOSTUNREACH`` for a routing_id that has gone away,
-  which is where ``evict`` is called from.
+  after the hat changes heads, so a new one learns who is present without asking;
+* departure -- ``ROUTER_MANDATORY`` makes ``send_multipart`` raise ``EHOSTUNREACH`` for a routing id that has gone
+  away, which is where ``evict`` is called from.
 
-``whois`` covers the remaining case: a data message arriving from a routing_id absent from the table.
+``whois`` covers the remaining case: a data message from a routing id absent from the table.
 """
 
 import time
@@ -27,7 +30,7 @@ import zmq
 from . import protocol
 from .protocol import Address, Identity
 
-# Bounds on `pending`, so a routing_id that never answers `whois` cannot grow the dict without limit. On overflow the
+# Bounds on `pending`, so a routing id that never answers `whois` cannot grow the dict without limit. On overflow the
 # sender receives a bounce instead of the message being held indefinitely.
 PENDING_MAX_PER_PARTICIPANT = 8
 PENDING_MAX_AGE_SECONDS = 5.0
@@ -51,7 +54,7 @@ class Held:
     at: float
 
 
-class Leader:
+class Hat:
     """Routing table and message switch. Owns the ROUTER socket but runs no loop; `Backend._pump_router` calls in."""
 
     def __init__(self, router: zmq.Socket, log: Any) -> None:
@@ -66,9 +69,9 @@ class Leader:
     # -- transmission ----------------------------------------------------
 
     def _send(self, routing_id: bytes, message: dict[str, Any]) -> bool:
-        """Send one message to a routing_id.
+        """Send one message to a routing id.
 
-        Returns False and evicts the routing_id when the ROUTER reports the peer unreachable. This is the only place a
+        Returns False and evicts it when the ROUTER reports the peer unreachable. This is the only place a
         departure is detected, since `ROUTER_NOTIFY` disconnect events are unavailable.
         """
         try:
@@ -82,7 +85,7 @@ class Leader:
             raise
 
     def _reachable(self, routing_id: bytes) -> bool:
-        """Test whether a routing_id is still connected, by sending it a `whois`.
+        """Test whether a routing id is still connected, by sending it a `whois`.
 
         A connected participant replies with `hello`, which `_hello` treats as idempotent. A departed one raises
         `EHOSTUNREACH` inside `_send`, which evicts it and returns False.
@@ -92,7 +95,7 @@ class Leader:
     # -- membership ------------------------------------------------------
 
     def evict(self, routing_id: bytes) -> None:
-        """Remove a routing_id from every table and send the remaining members an updated roster."""
+        """Remove a routing id from every table and send the remaining members an updated roster."""
         self.pending.pop(routing_id, None)
         self.whois_inflight.discard(routing_id)
         if (identity := self.routing_ids.pop(routing_id, None)) is None:
@@ -168,7 +171,7 @@ class Leader:
     def _hello(self, source: bytes, message: dict[str, Any]) -> None:
         """Bind a (channel, name) pair to a routing_id.
 
-        Participants send this on every DEALER connect, so it must be idempotent: after a leader changeover all of them
+        Participants send this on every DEALER connect, so it must be idempotent: after a hat changeover all of them
         re-announce at once and most are restating an identity this table already holds.
         """
         channel_name = message.get("channel")
@@ -266,9 +269,9 @@ class Leader:
     # -- whois -----------------------------------------------------------
 
     def _hold(self, source: bytes, dest_frame: bytes, body: bytes) -> None:
-        """Hold a message from an unregistered routing_id and send that routing_id a `whois`.
+        """Hold a message from an unregistered routing id and send that routing_id a `whois`.
 
-        Holding rather than bouncing means a send issued during a leader changeover is delivered late instead of
+        Holding rather than bouncing means a send issued during a hat changeover is delivered late instead of
         failing, so the caller sees no error. `_flush_pending` replays these once `hello` arrives.
         """
         held = self.pending.setdefault(source, [])

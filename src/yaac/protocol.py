@@ -1,8 +1,8 @@
 """Wire protocol: addresses, envelopes, control messages, and canonical serialization.
 
-Everything on the wire is JSON. Two kinds of message travel between a participant and the leader:
+Everything on the wire is JSON. Two kinds of message travel between a participant and the hat:
 
-* **data** -- a participant sends `[destination JSON][body]`; the leader delivers `[envelope JSON]`.
+* **data** -- a participant sends `[destination JSON][body]`; the hat delivers `[envelope JSON]`.
 * **control** -- a single JSON frame with a `kind` field.
 
 Control messages are told apart from envelopes by carrying `"from": null` rather than by a reserved name or
@@ -131,7 +131,7 @@ class Address:
     * `routing_id` -- the ULID used as the ZMQ routing id. Unique for the lifetime of one connection and never reused,
       so it stays unambiguous where a name would not.
 
-    A sender fills in whichever it knows; the leader fills in both, from its own table rather than from anything the
+    A sender fills in whichever it knows; the hat fills in both, from its own table rather than from anything the
     sender claimed.
     """
 
@@ -164,7 +164,7 @@ class Address:
 class Destination:
     """Frame 0 of a data message: which channel, and who on it.
 
-    `to=None` broadcasts to the whole channel. The leader validates `channel` against the sender's registered channel
+    `to=None` broadcasts to the whole channel. The hat validates `channel` against the sender's registered channel
     and otherwise ignores it; it is carried for logging and explicitness, never trusted.
     """
 
@@ -186,12 +186,12 @@ class Destination:
 
 @dataclass(frozen=True, slots=True)
 class Envelope:
-    """What the leader delivers to a recipient.
+    """What the hat delivers to a recipient.
 
     `to` is the recipient's address for a direct message and None for a broadcast. Recipients need the difference to
     choose a reply mode: answering a broadcast privately, or a private message publicly, reaches the wrong people.
 
-    `sender` is filled in by the leader from its routing_id table, so a participant cannot claim to be somebody else.
+    `sender` is filled in by the hat from its routing-id table, so a participant cannot claim to be somebody else.
     """
 
     id: str
@@ -262,7 +262,7 @@ def is_control(message: dict[str, Any]) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Identity:
-    """What the leader records for one routing_id."""
+    """What the hat records for one routing id."""
 
     channel: str
     name: str
@@ -277,11 +277,11 @@ class Identity:
 
 # Control messages -------------------------------------------------------
 #
-# Leader -> participant.
+# Hat -> participant.
 
 
 def whois() -> dict[str, Any]:
-    """Ask an unregistered routing_id to identify itself. Sent by a leader with no entry for it."""
+    """Ask an unregistered routing id to identify itself. Sent by a hat with no entry for it."""
     return {"from": None, "kind": "whois"}
 
 
@@ -310,11 +310,11 @@ def channels(entries: list[dict[str, Any]]) -> dict[str, Any]:
     return {"from": None, "kind": "channels", "channels": entries}
 
 
-# Participant -> leader.
+# Participant -> hat.
 
 
 def hello(channel: str, name: str, reply_to: str) -> dict[str, Any]:
-    """Claim a (channel, name) pair for this routing_id."""
+    """Claim a (channel, name) pair for this routing id."""
     return {
         "from": None,
         "kind": "hello",
@@ -325,5 +325,5 @@ def hello(channel: str, name: str, reply_to: str) -> dict[str, Any]:
 
 
 def channels_query() -> dict[str, Any]:
-    """Request the channel list. Sent by `Backend.probe_channels`; the sender is not registered by the leader."""
+    """Request the channel list. Sent by `Backend.probe_channels`; the sender is not registered by the hat."""
     return {"from": None, "kind": "channels?"}

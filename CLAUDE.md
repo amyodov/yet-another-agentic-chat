@@ -11,8 +11,8 @@ whenever you ship or defer something; it is the only record, as there is no sepa
 | --- | --- |
 | **frontend** | The MCP server: tool definitions, no state. |
 | **backend** | In-process module: ZMQ sockets, inbox, roster cache. |
-| **leader** | The backend that won the bind. Not privileged. |
-| **participant** | Any backend that did not. |
+| **hat** | Whichever backend won the bind. Confers the job of passing messages along, and nothing else. |
+| **participant** | Any backend on a channel, wearing the hat or not. |
 | **membership** | One (channel, name) a process holds. A process may hold several. |
 | **connection id** | A membership's routing id, returned by `join_channel` and used to address it. |
 | **channel** | A named conversation. Addressing, not isolation. |
@@ -31,7 +31,7 @@ never the Claude Code feature of the same name.
 src/yaac/
   frontend.py   MCP tool definitions
   backend.py    sockets, bind election, receive loops, connection state
-  leader.py        routing table, whois, roster, bounce
+  hat.py        routing table, whois, roster, bounce
   protocol.py   envelope + control messages, serialization
 ```
 
@@ -54,7 +54,7 @@ bundle libzmq built without drafts (`zmq.has('draft')` is `False`). True anywher
 Replacements, both non-draft:
 - **Arrival**: the participant's DEALER monitor fires `EVENT_CONNECTED`, and the participant re-sends `hello`. Covers
     the first
-  connect too, so a new leader is told who is present without asking.
+  connect too, so whoever picks it up next is told who is present without asking.
 - **Departure**: `ROUTER_MANDATORY` raises `EHOSTUNREACH` when sending to a routing id that left. Eviction is lazy,
   detected on the first failed send — which is when we want to bounce anyway.
 
@@ -78,7 +78,7 @@ separates two sessions in one directory. Absent on Claude Desktop. Nothing uses 
 
 
 **Several memberships per process.** `Backend` holds a dict of `Membership`, each with its own routing id, DEALER,
-roster and inbox, so the leader sees them as unrelated participants and the protocol needed no change. This matters
+roster and inbox, so the hat sees them as unrelated participants and the protocol needed no change. This matters
 for clients running one server per application rather than per conversation, such as Claude Desktop — where it also
 means one conversation can address another's connection, so `check_inbox` requires the id rather than guessing.
 
@@ -119,8 +119,8 @@ Each has a test.
 3. **`send` never blocks.** A full queue or absent peer must raise. Blocking inside an MCP call freezes the session.
 4. **Participant and channel names are never parsed, split, validated, or case-folded.** That is why routing uses a
    separate opaque routing id: `ROUTING_ID` has length and byte constraints that user-chosen names must not inherit.
-5. **The leader never reads a body.** A body that looks like a control message gets delivered, not obeyed.
-6. **`from` and the sender's channel come from the leader's table**, never from the sender. This is what makes
+5. **The hat never reads a body.** A body that looks like a control message gets delivered, not obeyed.
+6. **`from` and the sender's channel come from the hat's table**, never from the sender. This is what makes
    cross-channel injection impossible rather than merely forbidden.
 
 ## Tests
@@ -155,10 +155,11 @@ not "a stuck queue must fail, not grow silently".
 
 ## Design notes
 
-- **The leader holds no authority.** Soft state only, no policy, never configured, any participant can become it.
-- **The leader connects its own DEALER to its own ROUTER.** Costs one socket, and keeps a single send path — no "am I
-  the leader" branch anywhere.
-- **Probing must not bind.** If `list_channels` bound, a session that only looked would become leader and drop the
+- **The hat is put on by getting there first.** Soft state only, no policy, never configured, and it comes off when the
+    process exits.
+- **The hat connects its own DEALER to its own ROUTER.** Costs one socket, and keeps a single send path — no "am I
+  the hat" branch anywhere.
+- **Probing must not bind.** If `list_channels` bound, a session that only looked would become hat and drop the
   endpoint when the call returned. Its 10 s timeout is the only exit when nothing is listening, because ZMQ queues
   instead of failing. "Nobody on the air" is a normal answer.
 - **Hold, don't bounce, during a changeover.** A message from an unknown routing id is parked and a `whois` sent, so the
@@ -167,7 +168,7 @@ not "a stuck queue must fail, not grow silently".
 - **TCP, not `ipc`.** An `ipc://` socket file survives `kill -9` and then blocks bind forever, needing a lock file
   and manual cleanup. The kernel frees a TCP port itself, and libzmq sets `SO_REUSEADDR`.
 - **Port 19116** is `0x4AAC`, below the ephemeral range so the kernel won't hand it out as a source port.
-- **`created` is derived from the roster**, not sent by the leader: channels are deleted when empty, so being alone on
+- **`created` is derived from the roster**, not sent by the hat: channels are deleted when empty, so being alone on
   one means you just made it.
 
 ## Out of scope

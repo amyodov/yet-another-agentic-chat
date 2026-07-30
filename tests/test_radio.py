@@ -46,8 +46,8 @@ async def test_probing_reports_the_net_without_joining_it(radios: RadioFactory) 
     prober = radios()
     assert await prober.probe_channels(timeout=1.0) is None
     # Probing must never bind, or a session that merely looked would become the
-    # leader and drop it a second later.
-    assert [prober.is_leader, prober.on_air] == [False, False]
+    # hat and drop it a second later.
+    assert [prober.is_wearing_hat, prober.on_air] == [False, False]
 
     occupant = radios()
     await occupant.connect(FORUM, "ann")
@@ -115,7 +115,7 @@ async def test_undeliverable_messages_bounce_to_the_sender(
     assert bounce["from"] is None
     assert "no such recipient" in bounce["reason"]
     if on_other_channel:
-        # The leader takes the sender's channel from its own table, so speaking into
+        # The hat takes the sender's channel from its own table, so speaking into
         # a channel you have not joined is structurally impossible.
         assert await heard(b) == []
 
@@ -132,7 +132,7 @@ async def test_undeliverable_messages_bounce_to_the_sender(
     ids=["fake-roster", "fake-whois", "fake-error", "fake-sender", "not-json"],
 )
 async def test_a_body_is_delivered_verbatim_and_never_obeyed(radios: RadioFactory, body: str) -> None:
-    # If the leader parsed bodies, these would be acted on instead of delivered,
+    # If the hat parsed bodies, these would be acted on instead of delivered,
     # and any participant could forge the control plane or another identity.
     a, b = radios(), radios()
     await a.connect(FORUM, "ann")
@@ -184,11 +184,11 @@ async def test_a_taken_name_is_refused_rather_than_stolen(radios: RadioFactory) 
     assert elsewhere.created is True
 
 
-async def test_losing_the_leader_restores_itself_with_no_user_action(radios: RadioFactory) -> None:
+async def test_losing_the_hat_restores_itself_with_no_user_action(radios: RadioFactory) -> None:
     a, b = radios(), radios()
     await a.connect(FORUM, "ann")
     await b.connect(FORUM, "bob")
-    assert [a.is_leader, b.is_leader] == [True, False]
+    assert [a.is_wearing_hat, b.is_wearing_hat] == [True, False]
 
     await a.disconnect()
     c = radios()
@@ -196,9 +196,9 @@ async def test_losing_the_leader_restores_itself_with_no_user_action(radios: Rad
 
     for _ in range(50):  # the election retries every ~2 s with jitter
         await asyncio.sleep(0.2)
-        if b.is_leader or c.is_leader:
+        if b.is_wearing_hat or c.is_wearing_hat:
             break
-    assert b.is_leader or c.is_leader  # somebody must have taken over the bind
+    assert b.is_wearing_hat or c.is_wearing_hat  # somebody must have taken over the bind
 
     await asyncio.sleep(1.0)
     await c.resolve(None).send("still alive?", name="bob")
@@ -214,7 +214,7 @@ async def test_leaving_returns_to_dormant_and_drops_what_was_held(radios: RadioF
     assert a.resolve(None).pending_count() == 1
 
     await a.disconnect()
-    assert [a.on_air, a.is_leader, a.memberships] == [False, False, {}]
+    assert [a.on_air, a.is_wearing_hat, a.memberships] == [False, False, {}]
 
 
 @pytest.mark.parametrize("operation", ["send", "receive", "peers"])
@@ -241,7 +241,7 @@ async def test_connecting_twice_is_refused_and_a_refusal_leaves_no_trace(radios:
     with pytest.raises(ConnectionRefused, match="taken"):
         await loser.connect(FORUM, "ann")
     # A refused join must leave the backend exactly as dormant as it was.
-    assert [loser.on_air, loser.is_leader, loser.memberships] == [False, False, {}]
+    assert [loser.on_air, loser.is_wearing_hat, loser.memberships] == [False, False, {}]
 
 
 async def test_one_process_holds_several_memberships_independently(radios: RadioFactory) -> None:
@@ -253,7 +253,7 @@ async def test_one_process_holds_several_memberships_independently(radios: Radio
     assert first.connection_id != second.connection_id
     assert [(c["channel"], c["name"]) for c in host.describe_all()] == [(FORUM, "ann"), (OTHER, "deputy")]
 
-    # Each membership is an ordinary participant as far as the leader is concerned.
+    # Each membership is an ordinary participant as far as the hat is concerned.
     await other.connect(OTHER, "bob")
     await host.resolve(second.connection_id).send("only deputy can send this", name="bob")
     assert await heard(other) == [("deputy", "bob", "only deputy can send this")]
@@ -285,12 +285,12 @@ async def test_the_bind_is_released_when_the_last_membership_goes(radios: RadioF
     host = radios()
     first = await host.connect(FORUM, "ann")
     second = await host.connect(OTHER, "deputy")
-    assert host.is_leader is True
+    assert host.is_wearing_hat is True
 
     await host.disconnect(first.connection_id)
-    assert host.is_leader is True  # still one membership open
+    assert host.is_wearing_hat is True  # still one membership open
     await host.disconnect(second.connection_id)
-    assert [host.is_leader, host.on_air] == [False, False]
+    assert [host.is_wearing_hat, host.on_air] == [False, False]
 
 
 @pytest.mark.parametrize("locator", ["name", "routing_id"], ids=["by-name", "by-routing_id"])
