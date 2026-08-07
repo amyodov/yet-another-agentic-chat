@@ -299,6 +299,9 @@ def main() -> None:
         raise SystemExit(1) from exc
 
     log(f"dormant (rendezvous {_endpoint}); no sockets open, no files created")
+    if sys.platform == "win32":
+        # pyzmq needs a selector loop: the default ProactorEventLoop has no add_reader/add_writer.
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:
         asyncio.run(_serve())
     except KeyboardInterrupt:
