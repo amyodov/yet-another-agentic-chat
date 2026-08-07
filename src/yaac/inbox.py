@@ -16,13 +16,39 @@ This module imports no pyzmq and opens no sockets. It is called only from ``Back
 that never connects creates no files.
 """
 
-import fcntl
 import json
 import os
 import pathlib
+import tempfile
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # Windows: emulate flock over the first byte via msvcrt
+    fcntl = None
+    import msvcrt
+
 from .protocol import dumps
+
+
+def _lock_exclusive(file_obj) -> None:
+    if fcntl is not None:
+        fcntl.flock(file_obj.fileno(), fcntl.LOCK_EX)
+    else:
+        saved_position = file_obj.tell()
+        file_obj.seek(0)
+        msvcrt.locking(file_obj.fileno(), msvcrt.LK_LOCK, 1)
+        file_obj.seek(saved_position)
+
+
+def _unlock(file_obj) -> None:
+    if fcntl is not None:
+        fcntl.flock(file_obj.fileno(), fcntl.LOCK_UN)
+    else:
+        saved_position = file_obj.tell()
+        file_obj.seek(0)
+        msvcrt.locking(file_obj.fileno(), msvcrt.LK_UNLCK, 1)
+        file_obj.seek(saved_position)
 
 
 def runtime_dir() -> pathlib.Path:
@@ -31,6 +57,10 @@ def runtime_dir() -> pathlib.Path:
     ``XDG_RUNTIME_DIR`` when the platform provides one, ``/tmp/yaac`` otherwise
     (macOS, which is the common case for this project).
     """
+    if os.name == "nt":
+        # "/tmp/yaac" on Windows resolves against the current drive, so sessions
+        # started from different drives would silently get separate inboxes.
+        return pathlib.Path(tempfile.gettempdir()) / "yaac"
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     return pathlib.Path(xdg) / "yaac" if xdg else pathlib.Path("/tmp/yaac")
 
@@ -95,7 +125,7 @@ class Inbox:
 
         self.cursor_path.touch()
         with self.cursor_path.open("r+", encoding="utf-8") as cursor_file:
-            fcntl.flock(cursor_file.fileno(), fcntl.LOCK_EX)
+            _lock_exclusive(cursor_file)
             try:
                 raw = cursor_file.read().strip()
                 offset = int(raw) if raw else 0
@@ -125,7 +155,7 @@ class Inbox:
                     cursor_file.flush()
                 return messages
             finally:
-                fcntl.flock(cursor_file.fileno(), fcntl.LOCK_UN)
+                _unlock(cursor_file)
 
     def pending_count(self) -> int:
         """How many whole messages are waiting, without consuming them."""
