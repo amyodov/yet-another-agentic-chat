@@ -221,10 +221,17 @@ Settled in discussion with Alex; build only when told, ask before deviating.
 - **`from` and `to` are scope objects** whose fields compose: `{channel}` broadcasts to it, `{peer}` whispers,
   `{channel, peer}` is that peer as a member of that channel, and `to: {}` — no scope at all — addresses whoever
   wears the hat, for technical asks; symmetrically `from: {}` marks infrastructure messages such as bounces
-  (today `from: null`). Open: the world channel is a null channel on the wire, so `{}` and `{channel: null}` must
-  not collapse — either strict absent-vs-null discipline in the serializer, or a dedicated field for the hat
-  address. Also open: whether the message structure travels as an end-to-end body object the hat never decodes, or
-  as envelope fields the hat copies.
+  (today `from: null`). Senders never transmit `from` at all — the hat stamps it from its table (rule 6), so
+  `from: {}` is unforgeable by construction, not by validation. Open: the world channel is a null channel on the
+  wire, so `{}` and `{channel: null}` must not collapse — either strict absent-vs-null discipline in the
+  serializer, or a dedicated field for the hat address. Also open: whether the message structure travels as an
+  end-to-end body object the hat never decodes, or as envelope fields the hat copies.
+- **One envelope for all wire traffic, control included.** `hello`, channel listing, `whois`, `roster`, bounces
+  and chat all travel as the same mail shape; the control/data split by frame count disappears. Rule 5 restates
+  as: the hat interprets exactly the mail addressed to `{}`, and nothing else — delivery versus obedience decided
+  by addressing, not frame layout. What the receiving backend does with operator mail (roster to cache, bounce to
+  inbox) is backend policy, not a second format. Decide at build time whether this framing unification bumps
+  `PROTOCOL_VERSION`.
 - **Docs examples use the classical cast** — Alice, Bob, Carol; the hat-sees-everything caveat is "the hat is Eve
   by construction". One side note keeps a non-ASCII name to show names are unrestricted.
 
