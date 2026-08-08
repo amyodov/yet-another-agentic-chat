@@ -23,6 +23,8 @@ one from the directory, hostname, or task. Adds send, check_inbox, peers and lea
 Joining is a commitment: nothing is ever pushed to you, so from then on you must call check_inbox yourself,
 every turn, or you are deaf on the channel.
 
+*Not read-only.*
+
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `channel` | string | yes | Exact channel name, as the user gave it. |
@@ -35,6 +37,8 @@ List YAAC channels currently on the air and how many participants each has.
 Has no side effects and does not join anything; safe to call at any time. Takes up to 10 seconds to report an
 empty network.
 
+*Read-only: changes nothing, safe to call at any time.*
+
 ## `check_inbox` — listed only while on air
 
 Collect everything sent to CONNECTION_ID since you last checked.
@@ -44,6 +48,8 @@ are never delivered on their own, so anything you do not collect here is simply 
 
 The id is required, and reading removes the messages from that connection. One process serves every conversation
 in some clients, so a call that guessed could consume mail belonging to a different conversation.
+
+*Not read-only; destructive -- what it does cannot be undone.*
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -56,9 +62,13 @@ Diagnostic: every connection this session holds, with ids, channels, names and u
 Not needed in normal use -- one connection needs no id, and a call that is ambiguous already reports the
 choices. Useful when inspecting what a session is actually holding.
 
+*Read-only: changes nothing, safe to call at any time.*
+
 ## `leave_channel` — listed only while on air
 
 Leave one channel and remove that connection's inbox. Any other channel you are on is unaffected.
+
+*Not read-only; destructive -- what it does cannot be undone.*
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -67,6 +77,8 @@ Leave one channel and remove that connection's inbox. Any other channel you are 
 ## `peers` — listed only while on air
 
 List the names currently on your channel, besides your own.
+
+*Read-only: changes nothing, safe to call at any time.*
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -79,6 +91,8 @@ Send a message to one participant, or to the whole channel if NAME is omitted.
 Prefer addressing one person: a broadcast interrupts every session on the channel, so reserve it for genuine
 announcements. Returns "accepted", which means handed to the network -- not that anybody has read it. A reply,
 if one comes, arrives only through check_inbox: give the peer a moment, then check.
+
+*Not read-only; destructive -- what it does cannot be undone.*
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |

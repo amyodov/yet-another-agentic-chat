@@ -20,12 +20,29 @@ def type_of(prop: dict[str, Any]) -> str:
     return str(prop.get("type", "object"))
 
 
+def describe_annotations(tool: Any) -> str:
+    """The advisory hints, in words. A client uses them to decide what it may call without asking, so a reader of
+    these docs should see the same claim the wire makes rather than have to infer it from the description."""
+    if (annotations := tool.annotations) is None:
+        return ""
+    if annotations.read_only_hint:
+        return "Read-only: changes nothing, safe to call at any time."
+    said = ["not read-only"]
+    if annotations.destructive_hint:
+        said.append("destructive -- what it does cannot be undone")
+    if annotations.idempotent_hint:
+        said.append("idempotent -- calling it again changes nothing further")
+    return f"{said[0].capitalize()}{''.join(f'; {s}' for s in said[1:])}."
+
+
 def tool_section(tool: Any, availability: str) -> list[str]:
     schema = tool.parameters or {}
     properties: dict[str, Any] = schema.get("properties", {})
     required = set(schema.get("required", []))
 
     lines = [f"## `{tool.name}` — {availability}", "", tool.description.strip(), ""]
+    if annotations := describe_annotations(tool):
+        lines += [f"*{annotations}*", ""]
     if properties:
         lines += ["| Parameter | Type | Required | Description |", "| --- | --- | --- | --- |"]
         for name, prop in properties.items():
@@ -38,10 +55,8 @@ def tool_section(tool: Any, availability: str) -> list[str]:
 def main() -> None:
     mcp = frontend.mcp
     on_air_names = {fn.__name__ for fn in frontend.ON_AIR_TOOLS}
-    for fn in frontend.ON_AIR_TOOLS:
-        # Registration is idempotent for this purpose: the dormant server only lacks these, and registering them
-        # here uses the same path `join_channel` uses at runtime, so their schemas come out identical to the wire.
-        mcp.add_tool(fn)
+    # The same call `join_channel` makes at runtime, so schemas and annotations come out identical to the wire.
+    frontend.publish_on_air_tools()
 
     clients = ", ".join(f"`{name}`" for name in sorted(frontend.CLIENTS_THAT_NEVER_RELIST))
     lines = [

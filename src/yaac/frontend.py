@@ -30,6 +30,7 @@ from typing import Annotated, Any
 import mcp.server.stdio as stdio
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.mcpserver import Context, MCPServer
+from mcp_types import ToolAnnotations
 from pydantic import Field
 
 from .backend import (
@@ -70,6 +71,51 @@ CLIENTS_THAT_NEVER_RELIST = frozenset({"codex-mcp-client"})
 
 # Set once the on-air tools are listed for good, which makes join and leave stop moving them.
 _all_tools_announced = False
+
+# Tool annotations are advisory metadata a client reads to decide what it may do without asking. Codex's `writes`
+# approval mode, for one, prompts for anything not explicitly read-only.
+#
+# `read_only` is the claim that a call is a *look*: repeatable, safe to retry, safe to make speculatively. Anything
+# else is a *take*, and the spec's defaults for an unannotated tool are already the cautious ones -- destructive
+# true, idempotent false -- so what is written below is only ever the claim that a tool is safer than assumed.
+#
+# `open_world` is false throughout: nothing here reaches past 127.0.0.1 under one user account, so the entities a
+# call can touch are the sessions on this machine rather than anything outside it.
+LOOK = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+# destructive and idempotent are undefined when read_only is true, so they are left unset there.
+
+
+def take(*, destructive: bool, idempotent: bool) -> ToolAnnotations:
+    return ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=destructive,
+        idempotent_hint=idempotent,
+        open_world_hint=False,
+    )
+
+
+ANNOTATIONS = {
+    # Probing asks the hat for a channel list and is deliberately not registered as a participant, so it leaves no
+    # trace at either end.
+    "list_channels": LOOK,
+    "peers": LOOK,  # answered from the cached roster; no wire traffic at all
+    "dev_connections": LOOK,
+    # Joining destroys nothing -- it adds a membership, and creates the channel if it was empty. Not idempotent,
+    # though: a second join under the same name is refused as a collision, so a retried call reports failure while
+    # the membership from the first one stands, which is worse than an honest "no".
+    "join_channel": take(destructive=False, idempotent=False),
+    # A message cannot be unsent, and a broadcast spends every listening session's context. The thing destroyed is
+    # other people's attention, which no retry can give back.
+    "send": take(destructive=True, idempotent=False),
+    # Reading takes the messages rather than showing them. A client that believed this were a look could make the
+    # call speculatively, or auto-approve it, in a context with no way to act on what it consumed -- and the
+    # messages are then simply gone.
+    "check_inbox": take(destructive=True, idempotent=False),
+    # The inbox goes with the membership, unread mail included. Not idempotent either, and for a sharper reason
+    # than the others: with connection_id omitted, a second call resolves to a *different* membership and leaves
+    # that one too.
+    "leave_channel": take(destructive=True, idempotent=False),
+}
 
 
 def radio() -> Backend:
@@ -120,7 +166,7 @@ def _unread(membership: Membership) -> dict[str, Any]:
 # -- always listed -------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=ANNOTATIONS["list_channels"])
 async def list_channels() -> dict[str, Any]:
     """List YAAC channels currently on the air and how many participants each has.
 
@@ -137,7 +183,7 @@ async def list_channels() -> dict[str, Any]:
     return {"channels": channels, "status": "on the air"}
 
 
-@mcp.tool()
+@mcp.tool(annotations=ANNOTATIONS["join_channel"])
 async def join_channel(
     ctx: Context,
     channel: Annotated[str, Field(description="Exact channel name, as the user gave it.")],
@@ -298,10 +344,16 @@ async def dev_connections() -> dict[str, Any]:
 ON_AIR_TOOLS = (send, check_inbox, peers, leave_channel, dev_connections)
 
 
+def publish_on_air_tools() -> None:
+    """Register the five tools that only mean something while on a channel. Public so the docs generator lists
+    exactly what a client is served, annotations included, instead of rebuilding the registration by hand."""
+    for tool in ON_AIR_TOOLS:
+        mcp.add_tool(tool, annotations=ANNOTATIONS[tool.__name__])
+
+
 async def _publish_on_air_tools(ctx: Context) -> None:
     """Add the on-air tools and tell the client its list changed."""
-    for tool in ON_AIR_TOOLS:
-        mcp.add_tool(tool)
+    publish_on_air_tools()
     await _announce_tool_change(ctx)
 
 
@@ -317,8 +369,7 @@ def _announce_all_tools() -> None:
     """List every tool from now on, for a client that would never notice one appearing later."""
     global _all_tools_announced
     _all_tools_announced = True
-    for tool in ON_AIR_TOOLS:
-        mcp.add_tool(tool)
+    publish_on_air_tools()
 
 
 def _adapt_tool_list_to_client() -> None:

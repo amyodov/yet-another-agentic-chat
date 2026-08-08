@@ -163,6 +163,42 @@ async def test_the_dormant_tool_surface_is_what_this_client_can_act_on(
 
 
 @pytest.mark.parametrize(
+    "tool,expected",
+    [
+        ("list_channels", {"readOnlyHint": True, "openWorldHint": False}),
+        ("peers", {"readOnlyHint": True, "openWorldHint": False}),
+        ("dev_connections", {"readOnlyHint": True, "openWorldHint": False}),
+        (
+            "join_channel",
+            {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+        ),
+        ("send", {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False}),
+        (
+            "check_inbox",
+            {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
+        ),
+        (
+            "leave_channel",
+            {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
+        ),
+    ],
+)
+async def test_each_tool_tells_the_client_what_calling_it_costs(
+    endpoint: str, tool: str, expected: dict[str, bool]
+) -> None:
+    """A client decides from these whether a call needs the user's confirmation. read-only claims a call is a look:
+    repeatable, safe to retry, safe to make speculatively. check_inbox is the one that would be tempting to call a
+    look and must not be -- it takes the messages, so a speculative call consumes mail in a context that may have
+    no way to act on it. The listing itself is asserted, not the constants, because the wire is what a client sees.
+    """
+    # codex-mcp-client gets all seven at connect, which is how the on-air tools reach a single tools/list here.
+    stdout, _ = await run_server(endpoint, handshake("codex-mcp-client"))
+    [tools] = [m["result"]["tools"] for m in decode(stdout) if m.get("id") == 2]
+    [listed] = [t for t in tools if t["name"] == tool]
+    assert listed["annotations"] == expected
+
+
+@pytest.mark.parametrize(
     "client_name,after_leaving,notifications",
     [
         ("test", DORMANT_TOOLS, ["notifications/tools/list_changed"] * 2),
