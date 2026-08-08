@@ -1,0 +1,20 @@
+# Publishing is never automatic: this runs only when a GitHub release is published, which is a manual act of the
+# maintainer. The trust chain is PyPI's trusted publisher for amyodov/yet-another-agentic-chat, which accepts
+# uploads only from this workflow file running in the `pypi` environment -- OIDC, no token stored anywhere.
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
