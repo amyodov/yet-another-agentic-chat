@@ -72,6 +72,17 @@ Delivery is pull-only, so the tool descriptions have to carry the reminder to ca
 
 **Binding a busy port fails in ~0.4 ms** with `EADDRINUSE`. That is why every backend can just try.
 
+**Windows needs the selector event loop** (source-verified in pyzmq `zmq/asyncio.py`, not measured — nobody here has
+run Windows). `zmq.asyncio` waits on sockets with `loop.add_reader`, which the default `ProactorEventLoop` lacks;
+pyzmq then raises `RuntimeError` at first socket use unless tornado ≥ 6.1 is importable. `main` therefore passes
+`loop_factory=asyncio.SelectorEventLoop` on win32 — `loop_factory`, not `set_event_loop_policy`, because 3.14
+deprecates the policy API. The reverse constraint holds in tests: `asyncio.create_subprocess_exec` is proactor-only
+on Windows, so `conftest.py` picks the loop per test module via the `pytest_asyncio_loop_factories` hook.
+
+**The bind election stays single-winner on Windows** (source-verified in libzmq `tcp_listener.cpp`). Plain
+`SO_REUSEADDR` there would let a second bind of an actively-bound port succeed; libzmq uses `SO_EXCLUSIVEADDRUSE`
+on Windows instead, so exactly one ROUTER holds the endpoint on every OS.
+
 **`CLAUDE_CODE_SESSION_ID` is visible to both the MCP server and hooks**, and equals the `session_id` a hook gets on
 stdin. Better key than the cwd if v1 ever needs an out-of-process reader to find the right session, since it
 separates two sessions in one directory. Absent on Claude Desktop. Nothing uses it today.

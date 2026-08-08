@@ -22,7 +22,8 @@ Homepage = "https://github.com/amyodov/yet-another-agentic-chat"
 [dependency-groups]
 dev = [
     "pytest>=8",
-    "pytest-asyncio>=0.24",
+    # >=1.4 for the pytest_asyncio_loop_factories hook, which conftest.py uses to pick loop flavors on Windows.
+    "pytest-asyncio>=1.4",
     "ruff>=0.8",
 ]
 

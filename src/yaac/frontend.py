@@ -326,7 +326,11 @@ def main() -> None:
 
     log(f"dormant (rendezvous {_endpoint}); no sockets open, no files created")
     try:
-        asyncio.run(_serve())
+        # zmq.asyncio waits for socket readiness via loop.add_reader, which Windows's default ProactorEventLoop does
+        # not implement: pyzmq raises RuntimeError at the first socket use unless tornado happens to be installed.
+        # SelectorEventLoop implements it on every platform. loop_factory is the 3.12+ replacement for the
+        # event-loop-policy API, which 3.14 deprecates.
+        asyncio.run(_serve(), loop_factory=asyncio.SelectorEventLoop if sys.platform == "win32" else None)
     except KeyboardInterrupt:
         pass
     finally:

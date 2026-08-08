@@ -407,7 +407,9 @@ class Backend:
         it unconditionally and exactly one succeeds. No coordination between participants is required.
 
         libzmq sets SO_REUSEADDR on its listening sockets, so a TIME_WAIT entry left by a previous hat does not
-        prevent the next bind.
+        prevent the next bind. On Windows it sets SO_EXCLUSIVEADDRUSE instead (tcp_listener.cpp), because there
+        SO_REUSEADDR would let a second bind of an actively-bound port succeed -- and the election would crown two
+        hats.
         """
         if self.router is not None:
             return True
