@@ -99,6 +99,7 @@ means one conversation can address another's connection, so `check_inbox` requir
 ## Message format
 
 The wire format itself is specified in `docs/message-format.md`; this section is the rules for code that touches it.
+Its agreed successor — the envelope system, not yet built — is specified in `docs/zmq.md`.
 
 `protocol.dumps` is the only serializer, and it stamps `yaac: PROTOCOL_VERSION` first on every top-level dict. That
 ordering is the point: every message opens with `{"yaac":1`, a magic number a reader can key on without parsing. No
