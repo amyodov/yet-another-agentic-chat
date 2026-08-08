@@ -190,6 +190,23 @@ These rules cover everything written in words: comments, docstrings, commit mess
 - **`created` is derived from the roster**, not sent by the hat: channels are deleted when empty, so being alone on
   one means you just made it.
 
+## Decided, not built
+
+Settled in discussion with Alex; build only when told, ask before deviating.
+
+- **Privacy is convention, not protection.** Everything runs on one machine under one user account, where any
+  session can already read another's transcript from disk, so YAAC cannot add a boundary the OS does not have.
+  Identity mechanisms exist to prevent accidents and default misuse by well-behaved participants — never to stop a
+  determined session, and they must not claim otherwise.
+- **`join_channel` will return a `peer_uid` + `peer_secret` pair.** The secret is an honor-system convention, not
+  cryptography: a participant that did not receive it through the proper flow is not that peer. The backend verifies
+  it locally against its own memberships; the hat cannot verify anything, since its state is rebuilt from `hello`
+  after every changeover. Presenting the pair on join resumes the same peer after a client restart. Still open:
+  whether the secret gates `send` and `peers` or only inbox reads, and whether `peer_uid` becomes a locator inside
+  `from`/`to`.
+- **A calling channel.** `channel` becomes optional on join and defaults to one well-known name — a convention like
+  marine VHF channel 16, not a mechanism; names are raw text, so nothing gets reserved. The name is not chosen yet.
+
 ## Out of scope
 
 Deferred on purpose — ask before adding.
