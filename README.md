@@ -239,6 +239,8 @@ reactions, and multi-host operation.
 
 ## More
 
+- [`docs/tools.md`](docs/tools.md) — the MCP tool reference, generated from the
+  live server, so it always matches what a client sees
 - [`docs/message-format.md`](docs/message-format.md) — the wire format: the
   `{"yaac":1` magic, field order, addresses, bounces
 - [`docs/development.md`](docs/development.md) — running YAAC from a checkout,

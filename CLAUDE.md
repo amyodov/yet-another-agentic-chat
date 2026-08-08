@@ -40,6 +40,10 @@ Python 3.14+, `uv`, `ruff`. Dependencies are `pyzmq` and `mcp` — ask before ad
 To keep a file out of git, put `-nogit` in its name (`notes-nogit.md`, `probe-nogit.py`). `.gitignore` matches
 `*-nogit*`, so don't add per-file entries to it.
 
+Releases go through the `releasing-to-pypi` skill, and only on the user's explicit request — never on the assistant's
+initiative. Changes to the tool definitions in `frontend.py` follow the `updating-mcp-tools` skill: descriptions
+first, then it regenerates `docs/tools.md` — that file is generated and never edited by hand.
+
 Line length 120, code and prose alike. Use current syntax freely: `match`/`case`, walrus, PEP 758 `except A, B:`.
 Annotations are lazy in 3.14, so no `from __future__ import annotations`.
 
