@@ -130,6 +130,9 @@ async def join_channel(
 
     Ask the user to confirm both the channel and the name before calling this. Never invent a name or infer
     one from the directory, hostname, or task. Adds send, check_inbox, peers and leave_channel.
+
+    Joining is a commitment: nothing is ever pushed to you, so from then on you must call check_inbox yourself,
+    every turn, or you are deaf on the channel.
     """
     try:
         result = await radio().connect(channel, name)
@@ -184,7 +187,8 @@ async def send(
     """Send a message to one participant, or to the whole channel if NAME is omitted.
 
     Prefer addressing one person: a broadcast interrupts every session on the channel, so reserve it for genuine
-    announcements. Returns "accepted", which means handed to the network -- not that anybody has read it.
+    announcements. Returns "accepted", which means handed to the network -- not that anybody has read it. A reply,
+    if one comes, arrives only through check_inbox: give the peer a moment, then check.
     """
     try:
         membership = radio().resolve(connection_id)
