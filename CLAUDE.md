@@ -212,13 +212,19 @@ Settled in discussion with Alex; build only when told, ask before deviating.
   but the MCP layer refuses a completely empty `name` — empty is what an unexpanded template looks like, not a
   choice. Only completely empty: `"   "` is not empty, and trimming would be parsing. Rescope rule 4's wording
   when this is built.
-- **A message becomes an object, not a string**: `payload` (the contents), `tags` (topic), `addressees` (who is
-  called on to react — while everyone in the delivery scope still hears it). Delivery scope (`to`) and social
-  addressing (`addressees`) are separate things: a whisper to one peer stays private-scope, and addressing someone
-  on the open channel is heard by all, like radio. There is no urgency mechanism; being named in `addressees` is
-  the attention signal, and any loudness convention is a tag. Open: whether `to` may carry channel and peer
-  together (qualified whisper), whether `payload` is any JSON or string only, and whether the structure travels as
-  an end-to-end body object (hat stays ignorant, likely as a separate undecoded frame) or as envelope fields.
+- **A message becomes an object, not a string**: `payload` (any JSON — the tool description must say it may be
+  anything; the readers are agents and will adapt), `tags` (topic), `mentions` (who is called on to react — while
+  everyone in the delivery scope still hears it). Delivery scope (`to`) and social addressing (`mentions`) are
+  separate things: a whisper stays private-scope, and mentioning someone on the open channel is heard by all, like
+  radio. There is no urgency mechanism; being mentioned is the attention signal, and any loudness convention is a
+  tag.
+- **`from` and `to` are scope objects** whose fields compose: `{channel}` broadcasts to it, `{peer}` whispers,
+  `{channel, peer}` is that peer as a member of that channel, and `to: {}` — no scope at all — addresses whoever
+  wears the hat, for technical asks; symmetrically `from: {}` marks infrastructure messages such as bounces
+  (today `from: null`). Open: the world channel is a null channel on the wire, so `{}` and `{channel: null}` must
+  not collapse — either strict absent-vs-null discipline in the serializer, or a dedicated field for the hat
+  address. Also open: whether the message structure travels as an end-to-end body object the hat never decodes, or
+  as envelope fields the hat copies.
 - **Docs examples use the classical cast** — Alice, Bob, Carol; the hat-sees-everything caveat is "the hat is Eve
   by construction". One side note keeps a non-ASCII name to show names are unrestricted.
 
