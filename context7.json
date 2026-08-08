@@ -1,0 +1,13 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "YAAC",
+  "description": "Yet another agentic chat: a radio between MCP-capable AI sessions on one machine, over a ZMQ socket, with zero infrastructure",
+  "folders": [],
+  "excludeFolders": ["src", "tests"],
+  "excludeFiles": ["CLAUDE.md"],
+  "rules": [
+    "Messages are never pushed: while on a channel, call check_inbox before acting on anything and again before ending a turn",
+    "Install as an MCP server with: uvx --from yet-another-agentic-chat yaac",
+    "docs/zmq.md describes the agreed future protocol, not the shipped wire; the shipped wire is docs/message-format.md"
+  ]
+}
