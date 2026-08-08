@@ -118,6 +118,60 @@ async def test_arrows_navigate_only_when_there_is_no_text_to_move_through(endpoi
         assert app.query_one("#prompt").value == "draft"
 
 
+@pytest.mark.parametrize(
+    "channel,name",
+    [("z combinator forum", "ann"), ("as", "bob the second"), ("канал 9", "Колян")],
+    ids=["spaces", "reserved-looking-word", "non-ascii"],
+)
+async def test_joining_asks_for_a_name_and_never_parses_one(endpoint: str, channel: str, name: str) -> None:
+    """Selecting a channel borrows the prompt for one question. Everything a person supplies here is arbitrary
+    UTF-8 that may contain spaces, so it has to arrive as a whole line: a `/join <channel> as <name>` command
+    could only work by splitting on " as ", which is parsing a name -- forbidden, and unable to address a channel
+    actually called "as"."""
+    occupant = Backend(endpoint)
+    await occupant.connect(channel, "someone")
+    try:
+        app = ChatApp(endpoint, None, None)
+        async with app.run_test() as pilot:
+            await settle(pilot, 0.2)
+            assert app.membership is None
+
+            await pilot.press("left")  # channel list
+            await settle(pilot)
+            # Row 0 is "join a channel"; the probed channel follows.
+            app.query_one("#list").index = 1
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.asking is not None
+
+            await pilot.press(*name, "enter")
+            await settle(pilot)
+            assert app.membership is not None
+            assert (app.membership.channel, app.membership.name) == (channel, name)
+    finally:
+        await occupant.disconnect_all()
+        occupant.close()
+
+
+async def test_a_question_can_be_abandoned(endpoint: str) -> None:
+    """A pending question owns the prompt, so the arrows must not carry you out of it half-answered. Esc is the
+    only way back, and it leaves you where you were."""
+    app = ChatApp(endpoint, "forum", "ann")
+    async with app.run_test() as pilot:
+        await settle(pilot, 0.2)
+        app.ask("join somewhere as", lambda answer: None)
+        await pilot.pause()
+        await pilot.press("left")
+        await pilot.pause()
+        assert app.mode == "chat"
+        assert app.asking is not None
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.asking is None
+        assert app.membership is not None  # still on the channel it was on
+
+
 async def test_picking_a_peer_makes_the_next_message_a_whisper(endpoint: str) -> None:
     """Members is a picker with a consequence, not a display: choosing someone is how you address them, and
     'everyone' is a row you have to choose rather than the state you fall into."""

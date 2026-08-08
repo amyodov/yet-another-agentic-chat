@@ -53,6 +53,19 @@ is the first row — something you choose, not the state you fall into by saying
 If your recipient leaves, addressing falls back to the channel and says so, rather than quietly sending a whisper
 into a routing id that is gone.
 
+## No commands, because names cannot be parsed
+
+Selecting a channel borrows the prompt for one question — *join z combinator forum as…* — and Enter joins.
+Selecting `＋ join a channel…` asks twice, for the channel and then the name. Esc abandons the question and leaves
+you where you were; while one is pending the arrows stay put, so a half-answered question cannot be navigated away
+from.
+
+This is not a style preference. Channel and participant names are arbitrary UTF-8 that may contain spaces, and
+hard rule 4 says they are never parsed or split. A command like `/join <channel> as <name>` could only work by
+splitting on `" as "` — which is parsing a name, and which cannot address a channel actually called `as`, or one
+containing it. One question, one whole line, no grammar. Only leading and trailing whitespace is stripped;
+everything else the person typed is the name.
+
 ## Presence lives in the transcript
 
 A single column cannot dock a roster panel, and a mode you have to *enter* cannot answer "who is here" while you
@@ -78,9 +91,7 @@ not a crowd, so the names fit and are more useful than a number.
 ## Not built yet
 
 - **Several memberships at once.** `Backend` already holds a dict of them, so the protocol needs nothing; the
-  client keeps one. Switching channels currently means leaving and rejoining, via `/join <channel> as <name>`.
-- **Joining from the channel list.** The list shows what is on the air and marks where you are, but picking a row
-  prints the `/join` line instead of asking for a name inline.
+  client keeps one, and switching channels leaves the old one.
 - **`@name` completion.** Ghost text on the prompt, with an up/down candidate strip when a prefix is ambiguous.
   Up/Down are displaced from history recall only while that strip is showing.
 - **Last-traffic times** (`5m`) in the members list. The hat has the timestamps; the roster message would need to

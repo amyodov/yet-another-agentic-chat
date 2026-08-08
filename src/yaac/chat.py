@@ -17,6 +17,7 @@ mid-sentence. See docs/tui.md.
 import argparse
 import asyncio
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -80,6 +81,7 @@ class ChatApp(App):
         self.membership: Membership | None = None
         self.recipient: str | None = None  # None means everyone; direct is the default once a peer is picked
         self.present: list[str] = []  # last roster seen, so the next one can be diffed into arrivals and departures
+        self.asking: tuple[str, Callable[[str], Any]] | None = None  # question borrowing the prompt, and its answer
         self.mode = "chat"
         self._rows: list[tuple[str, str]] = []  # (kind, value) parallel to the picker's items
 
@@ -171,6 +173,9 @@ class ChatApp(App):
         self.enter_mode(self.AXIS[(self.AXIS.index(self.mode) + step) % len(self.AXIS)])
 
     def action_back(self) -> None:
+        if self.asking is not None:
+            self.stop_asking()
+            return
         self.enter_mode("chat")
 
     def enter_mode(self, mode: str) -> None:
@@ -224,27 +229,58 @@ class ChatApp(App):
             case "recipient":
                 self.recipient = value or None
                 self.enter_mode("chat")
-            case "channel":
-                self.run_worker(self.switch(value), exclusive=True)
-            case "join":
+            case "channel" if self.membership and self.membership.channel == value:
                 self.enter_mode("chat")
-                self.write("[dim]Type: /join <channel> as <your name>[/dim]")
+            case "channel":
+                self.ask(f"join {value or '(world)'} as", lambda name: self.join_named(value, name))
+            case "join":
+                self.ask(
+                    "channel to join",
+                    lambda channel: self.ask(f"join {channel} as", lambda name: self.join_named(channel, name)),
+                )
             case _:
                 pass
 
-    async def switch(self, channel: str) -> None:
-        if self.membership and self.membership.channel == channel:
-            self.enter_mode("chat")
-            return
+    # -- questions -------------------------------------------------------
+
+    def ask(self, question: str, answer: Callable[[str], Any]) -> None:
+        """Borrow the prompt for one free-text answer.
+
+        Everything a person must supply -- a channel, a name -- is arbitrary UTF-8 that may contain spaces, so it
+        has to arrive as a whole line. A command like `/join <channel> as <name>` could only work by splitting on
+        " as ", which is parsing a name; hard rule 4 forbids that, and it would be unable to address a channel
+        called "as" at all. One question, one line, no grammar.
+        """
+        self.asking = (question, answer)
         self.enter_mode("chat")
-        self.write(f"[dim]Type: /join {channel} as <your name>[/dim]")
+        prompt = self.query_one("#prompt", Input)
+        prompt.value = ""
+        prompt.placeholder = f"{question}…  (esc to cancel)"
+        prompt.focus()
+        self.refresh_status()
+
+    def stop_asking(self) -> None:
+        self.asking = None
+        prompt = self.query_one("#prompt", Input)
+        prompt.value = ""
+        prompt.placeholder = "message, or press ← for channels and → for who is here"
+        self.refresh_status()
+
+    async def join_named(self, channel: str, name: str) -> None:
+        """Leave whatever is held and join this one. A single membership for now; Backend already allows more."""
+        if self.membership is not None:
+            await self.radio.disconnect(self.membership.routing_id)
+            self.membership = None
+            self.present = []
+        await self.join(channel, name)
 
     # -- input -----------------------------------------------------------
 
     async def on_key(self, event: events.Key) -> None:
         """Arrows navigate only when there is no text to move through, which is what makes the gesture free."""
         prompt = self.query_one("#prompt", Input)
-        if self.mode != "chat" or not prompt.has_focus or prompt.value:
+        # A pending question owns the line: navigating away would abandon it half-answered, so only Esc leaves.
+        if self.mode != "chat" or self.asking is not None or not prompt.has_focus or prompt.value:
             return
         match event.key:
             case "left":
@@ -256,12 +292,19 @@ class ChatApp(App):
 
     @on(Input.Submitted, "#prompt")
     async def submit(self, event: Input.Submitted) -> None:
+        # Only leading and trailing whitespace goes: a name is arbitrary UTF-8 and is never otherwise touched.
         text = event.value.strip()
+        if self.asking is not None:
+            _, answer = self.asking
+            self.stop_asking()
+            if text:
+                result = answer(text)
+                if asyncio.iscoroutine(result):
+                    await result
+            return
+
         self.query_one("#prompt", Input).value = ""
         if not text:
-            return
-        if text.startswith("/"):
-            await self.command(text)
             return
         if self.membership is None:
             self.write("[red]Not on a channel. Press ← to pick one.[/red]")
@@ -273,27 +316,17 @@ class ChatApp(App):
             return
         self.write(f"{stamp(None)}  [b]you[/b] → {self.recipient or '[i]all[/i]'}   {text}")
 
-    async def command(self, text: str) -> None:
-        """Only what the modes cannot express yet: joining needs two free-text values at once."""
-        match text.split():
-            case ["/join", channel, "as", *rest] if rest:
-                if self.membership is not None:
-                    await self.radio.disconnect(self.membership.routing_id)
-                    self.membership = None
-                await self.join(channel, " ".join(rest))
-            case ["/quit"]:
-                self.exit()
-            case _:
-                self.write("[dim]/join <channel> as <name>   ·   /quit[/dim]")
-
     # -- chrome ----------------------------------------------------------
 
     def refresh_status(self) -> None:
         """The one piece of permanent chrome, so it carries what must be true at a glance: where you are, who you
         are about to interrupt, and who is listening. Names rather than a count, because a YAAC channel holds a
         handful of sessions, not a crowd."""
+        if self.asking is not None:
+            self.query_one("#status", Static).update(f"{self.asking[0]}?  ·  enter to confirm · esc to cancel")
+            return
         if self.membership is None:
-            self.query_one("#status", Static).update("not on a channel  ·  ← channels")
+            self.query_one("#status", Static).update("not on a channel  ·  ← channels to see what is on the air")
             return
         listening = ", ".join(self.present[:4]) + (f" +{len(self.present) - 4}" if len(self.present) > 4 else "")
         here = f"with {listening}" if self.present else "alone here"
