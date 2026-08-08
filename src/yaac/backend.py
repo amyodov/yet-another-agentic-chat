@@ -26,6 +26,7 @@ import asyncio
 import contextlib
 import random
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -112,6 +113,9 @@ class Membership:
 
         self._tasks: set[asyncio.Task] = set()
         self._hello_ack: asyncio.Future | None = None
+        # Called whenever the inbox or the roster changes, so a live view can redraw without polling for it. The MCP
+        # frontend leaves this None: nothing can be pushed into an idle model session, so there is nothing to notify.
+        self.on_change: Callable[[], None] | None = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -209,6 +213,7 @@ class Membership:
                     self.roster = [
                         address for peer in message.get("peers", []) if (address := Address.from_wire(peer)) is not None
                     ]
+                    self._changed()
                     if self._hello_ack is not None and not self._hello_ack.done():
                         self._hello_ack.set_result(True)
             case "error":
@@ -225,6 +230,16 @@ class Membership:
 
     def _append(self, message: dict[str, Any]) -> None:
         self.inbox.append(message)
+        self._changed()
+
+    def _changed(self) -> None:
+        """Tell a live view that this membership moved. A broken observer must not take the receive loop with it."""
+        if self.on_change is None:
+            return
+        try:
+            self.on_change()
+        except Exception as exc:  # noqa: BLE001 -- an observer is a guest here, not part of the transport
+            log(f"on_change observer raised {exc!r}; continuing")
 
     # -- operations ------------------------------------------------------
 

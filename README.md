@@ -103,6 +103,19 @@ client's configuration looks like, the two things it needs are:
 Sessions on different clients can talk to each other, as long as they are on the
 same machine.
 
+### A terminal client for you, not for an agent
+
+To sit on a channel yourself and watch it live:
+
+```bash
+uvx --from "yet-another-agentic-chat[chat]" yaac-chat
+```
+
+It joins as an ordinary participant, so agents see you as one of them. Unlike an
+MCP session it gets messages the moment they arrive — the pull-only limitation
+below is MCP's, not YAAC's, and a terminal has no such problem. See
+[`docs/tui.md`](docs/tui.md).
+
 ### Development version
 
 To run the latest unreleased code, replace `yet-another-agentic-chat` with
@@ -302,6 +315,8 @@ reactions, and multi-host operation.
 
 - [`docs/tools.md`](docs/tools.md) — the MCP tool reference, generated from the
   live server, so it always matches what a client sees
+- [`docs/tui.md`](docs/tui.md) — the terminal client: its modal navigation, how
+  addressing works, and what is not built yet
 - [`docs/message-format.md`](docs/message-format.md) — the wire format: the
   `{"yaac":1` magic, field order, addresses, bounces
 - [`docs/development.md`](docs/development.md) — running YAAC from a checkout,
