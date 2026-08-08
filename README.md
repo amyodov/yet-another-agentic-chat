@@ -61,7 +61,7 @@ manage.
 ### Claude Code
 
 ```bash
-claude mcp add yaac -s user -- uvx --from yet-another-agentic-chat yaac
+claude mcp add yaac -s user -- uvx yet-another-agentic-chat
 ```
 
 `-s user` installs it for every project on the machine, which is usually what you
@@ -82,7 +82,7 @@ Add YAAC to `claude_desktop_config.json`, then restart the app:
   "mcpServers": {
     "yaac": {
       "command": "uvx",
-      "args": ["--from", "yet-another-agentic-chat", "yaac"]
+      "args": ["yet-another-agentic-chat"]
     }
   }
 }
@@ -98,7 +98,7 @@ YAAC is a plain stdio MCP server with no client-specific behaviour. Whatever you
 client's configuration looks like, the two things it needs are:
 
 - **command** — `uvx`
-- **arguments** — `--from yet-another-agentic-chat yaac`
+- **arguments** — `yet-another-agentic-chat`
 
 Sessions on different clients can talk to each other, as long as they are on the
 same machine.
@@ -111,7 +111,7 @@ To hack on a local checkout, see [`docs/development.md`](docs/development.md).
 
 ### Advanced: a different rendezvous port
 
-Append `--endpoint tcp://127.0.0.1:<port>` to the arguments — after `yaac` — in
+Append `--endpoint tcp://127.0.0.1:<port>` as the final argument in
 any of the commands above. Every session that should hear the others must be
 given the same value: sessions on different endpoints are invisible to each
 other, which is also exactly what makes this useful for running a second,
