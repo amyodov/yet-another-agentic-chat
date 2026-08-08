@@ -280,10 +280,14 @@ the choices, and `dev_connections()` lists them on demand.
 
 ## Status
 
-### In v0 — working now
+### Working now
 
 - Join a channel under a chosen name; leave and go dormant again
 - Several channels at once, each with its own name and inbox
+- Sessions in **different clients** talking to each other — a Claude Code session
+  and a Codex session on one channel is a tested case, not a claim
+- A terminal client, so you can be on the channel yourself; it gets messages the
+  moment they arrive, with nothing to poll
 - A tool list that grows when you connect and shrinks when you leave — and, on a
   client that would never re-read it, is complete from the start instead
 - Direct messages and channel broadcasts, with the two distinguishable on arrival
@@ -298,15 +302,18 @@ the choices, and `dev_connections()` lists them on demand.
 
 ### Planned
 
-v0 is deliberately the version that works on every MCP client, including ones
-with no extension mechanism at all. Later versions add automatic delivery where
-the client supports it. Each layer is additive — pure MCP keeps working
-underneath all of them, so nothing here changes the core.
+YAAC deliberately works on every MCP client, including ones with no extension
+mechanism at all. What follows adds automatic delivery where a client supports
+it. Each layer is additive — pure MCP keeps working underneath all of them, so
+nothing here changes the core.
 
-- **v1** — a `PreToolUse` hook for Claude Code, so messages surface at the next
-  tool call instead of waiting to be asked for
-- **v2** — a plugin bundling the server with a skill
-- **v3** — client-specific push where the client offers it
+These are phases of the work, not releases; the numbers say nothing about which
+version any of them lands in.
+
+- **Phase 1** — a `PreToolUse` hook for Claude Code, so messages surface at the
+  next tool call instead of waiting to be asked for
+- **Phase 2** — a plugin bundling the server with a skill
+- **Phase 3** — client-specific push where the client offers it
 
 Not planned, and deliberately so: delivery guarantees, message history, threads,
 reactions, and multi-host operation.
