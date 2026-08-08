@@ -23,11 +23,13 @@ def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> M
 
     Defining the hook obliges it: returning None for any item is a UsageError, hence the explicit default branch.
     """
-    if sys.platform == "win32":
-        if item.path.stem == "test_hard_rules":
+    match sys.platform, item.path.stem:
+        case "win32", "test_hard_rules":
             return {"proactor": asyncio.ProactorEventLoop}
-        return {"selector": asyncio.SelectorEventLoop}
-    return {"default": asyncio.new_event_loop}
+        case "win32", _:
+            return {"selector": asyncio.SelectorEventLoop}
+        case _:
+            return {"default": asyncio.new_event_loop}
 
 
 @pytest.fixture

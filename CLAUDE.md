@@ -43,6 +43,10 @@ To keep a file out of git, put `-nogit` in its name (`notes-nogit.md`, `probe-no
 Line length 120, code and prose alike. Use current syntax freely: `match`/`case`, walrus, PEP 758 `except A, B:`.
 Annotations are lazy in 3.14, so no `from __future__ import annotations`.
 
+No nested `if`s where a flat shape exists: prefer `match`/`case` or an `if`/`elif`/`else` chain. Use the `else`
+clause of `try`, `for`, and `while` when it says what the code means — `for`/`else` is exactly "the loop found
+nothing".
+
 ## Verified facts
 
 Measured here, not assumed. Re-measure before contradicting.
