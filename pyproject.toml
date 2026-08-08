@@ -22,6 +22,8 @@ dependencies = [
 
 [project.scripts]
 yaac = "yaac.frontend:main"
+# Same entry point under the distribution name, so bare `uvx yet-another-agentic-chat` finds an executable to run.
+yet-another-agentic-chat = "yaac.frontend:main"
 
 [project.urls]
 Homepage = "https://github.com/amyodov/yet-another-agentic-chat"
