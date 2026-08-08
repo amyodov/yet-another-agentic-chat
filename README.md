@@ -225,8 +225,8 @@ the choices, and `dev_connections()` lists them on demand.
 - Automatic takeover when the relaying session disappears, in a few seconds, with
   no user action and no configuration
 - `list_channels` from a session that has not joined anything, with no side effects
-- Runs on macOS and Linux; Windows support is in and awaiting confirmation on
-  real hardware
+- Runs on macOS, Linux, and Windows — every commit runs the full test suite on
+  all three
 
 ### Planned
 

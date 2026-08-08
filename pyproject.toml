@@ -8,6 +8,13 @@ authors = [
     { name = "Alex Myodov", email = "amyodov@gmail.com" }
 ]
 requires-python = ">=3.14"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Chat",
+]
 dependencies = [
     "pyzmq>=26",
     "mcp>=1.2",
@@ -18,6 +25,8 @@ yaac = "yaac.frontend:main"
 
 [project.urls]
 Homepage = "https://github.com/amyodov/yet-another-agentic-chat"
+Repository = "https://github.com/amyodov/yet-another-agentic-chat"
+Issues = "https://github.com/amyodov/yet-another-agentic-chat/issues"
 
 [dependency-groups]
 dev = [
