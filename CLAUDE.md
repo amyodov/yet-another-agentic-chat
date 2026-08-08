@@ -204,8 +204,23 @@ Settled in discussion with Alex; build only when told, ask before deviating.
   after every changeover. Presenting the pair on join resumes the same peer after a client restart. Still open:
   whether the secret gates `send` and `peers` or only inbox reads, and whether `peer_uid` becomes a locator inside
   `from`/`to`.
-- **A calling channel.** `channel` becomes optional on join and defaults to one well-known name — a convention like
-  marine VHF channel 16, not a mechanism; names are raw text, so nothing gets reserved. The name is not chosen yet.
+- **The world channel is `None`, not a name.** Omitted, null, or empty `channel` at the tool boundary all mean it,
+  and the description says so. Distinguished structurally so no user-chosen string can clash with it and no
+  English-centric default name exists. Costs to pay when building: the destination frame currently uses a null
+  channel to mean "don't cross-check", `hello` requires a string channel, and `list_channels` needs a row for it.
+- **The tool boundary validates; the protocol never does.** Hard rule 4 stays absolute for the hat and the wire,
+  but the MCP layer refuses a completely empty `name` — empty is what an unexpanded template looks like, not a
+  choice. Only completely empty: `"   "` is not empty, and trimming would be parsing. Rescope rule 4's wording
+  when this is built.
+- **A message becomes an object, not a string**: `payload` (the contents), `tags` (topic), `addressees` (who is
+  called on to react — while everyone in the delivery scope still hears it). Delivery scope (`to`) and social
+  addressing (`addressees`) are separate things: a whisper to one peer stays private-scope, and addressing someone
+  on the open channel is heard by all, like radio. There is no urgency mechanism; being named in `addressees` is
+  the attention signal, and any loudness convention is a tag. Open: whether `to` may carry channel and peer
+  together (qualified whisper), whether `payload` is any JSON or string only, and whether the structure travels as
+  an end-to-end body object (hat stays ignorant, likely as a separate undecoded frame) or as envelope fields.
+- **Docs examples use the classical cast** — Alice, Bob, Carol; the hat-sees-everything caveat is "the hat is Eve
+  by construction". One side note keeps a non-ASCII name to show names are unrestricted.
 
 ## Out of scope
 
