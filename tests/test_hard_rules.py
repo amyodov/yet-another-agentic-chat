@@ -7,6 +7,7 @@ because getting it wrong is either invisible or catastrophic in production.
 import asyncio
 import contextlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -111,17 +112,19 @@ async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint: str, t
         },
         {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "dev_connections", "arguments": {}}},
     ]
-    stdout, _ = await run_server(
-        endpoint,
-        requests,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(tmp_path),
-            "TMPDIR": str(runtime),
-            "XDG_RUNTIME_DIR": str(runtime),
-            "PYTHONPATH": str(REPO / "src"),
-        },
-    )
+    # The parent environment is inherited, not replaced: a replacement env without SYSTEMROOT cannot even start
+    # Python on Windows. What the test needs is only that every location the server might treat as writable --
+    # home and temp, under both the POSIX and the Windows variable names -- points into the watched directory.
+    redirect = {
+        "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),
+        "TMPDIR": str(runtime),
+        "TMP": str(runtime),
+        "TEMP": str(runtime),
+        "XDG_RUNTIME_DIR": str(runtime),
+        "PYTHONPATH": str(REPO / "src"),
+    }
+    stdout, _ = await run_server(endpoint, requests, env={**os.environ, **redirect})
     # The server really did run, go on air, and answer -- and still wrote nothing anywhere it could reach.
     assert [m["id"] for m in decode(stdout) if "id" in m] == [1, 2, 3, 4, 5]
     assert list(runtime.rglob("*")) == []
