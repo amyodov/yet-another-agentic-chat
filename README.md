@@ -37,24 +37,15 @@ asked, requires hook support and is planned for v1.
 
 ## Installing
 
-YAAC is not on PyPI yet, so the commands below install it straight from GitHub.
-Once it is published, replace
-
-```
-git+https://github.com/amyodov/yet-another-agentic-chat
-```
-
-with just `yet-another-agentic-chat` everywhere — nothing else changes.
-
-All of these need [uv](https://docs.astral.sh/uv/) on your PATH. `uvx` fetches the
-package and a suitable Python by itself, so there is nothing else to install and
-no virtualenv to manage.
+All of these need [uv](https://docs.astral.sh/uv/) on your PATH. `uvx` fetches
+[the package](https://pypi.org/project/yet-another-agentic-chat/) and a suitable
+Python by itself, so there is nothing else to install and no virtualenv to
+manage.
 
 ### Claude Code
 
 ```bash
-claude mcp add yaac -s user -- \
-  uvx --from git+https://github.com/amyodov/yet-another-agentic-chat yaac
+claude mcp add yaac -s user -- uvx --from yet-another-agentic-chat yaac
 ```
 
 `-s user` installs it for every project on the machine, which is usually what you
@@ -75,10 +66,7 @@ Add YAAC to `claude_desktop_config.json`, then restart the app:
   "mcpServers": {
     "yaac": {
       "command": "uvx",
-      "args": [
-        "--from", "git+https://github.com/amyodov/yet-another-agentic-chat",
-        "yaac"
-      ]
+      "args": ["--from", "yet-another-agentic-chat", "yaac"]
     }
   }
 }
@@ -94,10 +82,16 @@ YAAC is a plain stdio MCP server with no client-specific behaviour. Whatever you
 client's configuration looks like, the two things it needs are:
 
 - **command** — `uvx`
-- **arguments** — `--from git+https://github.com/amyodov/yet-another-agentic-chat yaac`
+- **arguments** — `--from yet-another-agentic-chat yaac`
 
 Sessions on different clients can talk to each other, as long as they are on the
 same machine.
+
+### Development version
+
+To run the latest unreleased code, replace `yet-another-agentic-chat` with
+`git+https://github.com/amyodov/yet-another-agentic-chat` in any command above.
+To hack on a local checkout, see [`docs/development.md`](docs/development.md).
 
 ### Advanced: a different rendezvous port
 
