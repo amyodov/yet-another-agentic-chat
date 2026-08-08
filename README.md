@@ -8,20 +8,32 @@ maybe different people driving them. They need to tell each other things:
 refactor in ten minutes, hold your commits"*. YAAC is how they do that, and how
 you talk into the same conversation by hand.
 
-## Zero infrastructure
-
 The mental model is **a network of handheld radios, not a phone network.** Buy one
 and it works — it just has nobody to talk to. Buy a second and there's a
-conversation. Nothing is deployed, nothing is started, nothing is configured.
+conversation. There is no config file, no environment variable, no port to choose,
+no daemon, and nothing to run first. Sessions find each other at a fixed local
+address — `tcp://127.0.0.1:19116`, and `19116` is `0x4AAC`, which is where the
+name comes from. Whichever session needs it first claims it and relays for the
+others; if that session goes away, another takes over by itself, within a few
+seconds and without anyone doing anything.
 
-There is no config file, no environment variable, no port to choose, no daemon,
-and nothing to run first.
+## What it's good for
 
-Sessions find each other at a fixed address, `tcp://127.0.0.1:19116` — `19116` is
-`0x4AAC`, which is where the name comes from. Whichever session needs it first
-claims it and relays for the others; if that session goes away, another takes over
-by itself, within a few seconds and without anyone doing anything. You never
-choose it, and nothing has to be running for the first session to start.
+- **Parallel worktrees on one repo.** Two sessions refactor on different
+  branches. The one that renames a field tells the other before it builds a
+  day's work on the old name.
+- **A manager conversation.** You discuss what to build with Claude Desktop; it
+  passes the task to a Claude Code session over YAAC and collects the result.
+  Chat conversations and coding sessions are equal participants — any MCP client
+  can join.
+- **Announcements.** *"CI is red, hold your pushes"* — one broadcast reaches
+  every session on the channel.*
+- **Long jobs.** One session babysits a slow test suite and messages the coding
+  session when it goes green, instead of you ferrying the news by hand.*
+
+\* Received when the listening session next checks its inbox — see *Messages do
+not arrive on their own* below. Delivery at the next tool call, without being
+asked, requires hook support and is planned for v1.
 
 ## Installing
 
@@ -84,38 +96,18 @@ client's configuration looks like, the two things it needs are:
 - **command** — `uvx`
 - **arguments** — `--from git+https://github.com/amyodov/yet-another-agentic-chat yaac`
 
-Everything else — the tools, the wire protocol, the rendezvous — is identical
-across clients. Sessions on different clients can talk to each other, as long as
-they are on the same machine.
+Sessions on different clients can talk to each other, as long as they are on the
+same machine.
 
-### Working on YAAC itself
+### Advanced: a different rendezvous port
 
-Clone it and let `uv` run it from your checkout, so your edits take effect on the
-client's next restart with no reinstall:
-
-```bash
-git clone https://github.com/amyodov/yet-another-agentic-chat
-cd yet-another-agentic-chat
-uv sync
-uv run pytest
-```
-
-Point a client at the checkout with `uv run --directory`:
-
-```bash
-claude mcp add yaac-dev -- \
-  uv run --directory /path/to/yet-another-agentic-chat yaac \
-  --endpoint tcp://127.0.0.1:19117
-```
-
-The `--endpoint` is worth adding while developing: it puts your working copy on a
-separate rendezvous point, so a half-finished change cannot disturb the sessions
-you have on the released build, and the two nets stay invisible to each other.
-
-`19117` is just the port after the default. Any free port below 32768 will do;
-staying under that range keeps the kernel from handing the same number out as the
-source port of some unrelated outbound connection, which would make the bind fail
-for reasons that have nothing to do with YAAC.
+Append `--endpoint tcp://127.0.0.1:<port>` to the arguments — after `yaac` — in
+any of the commands above. Every session that should hear the others must be
+given the same value: sessions on different endpoints are invisible to each
+other, which is also exactly what makes this useful for running a second,
+isolated net (say, a development build next to your daily one — see
+[`docs/development.md`](docs/development.md)). Pick a free port below 32768, out
+of the range the kernel hands to outbound connections.
 
 ## Using it
 
@@ -172,18 +164,6 @@ The tool descriptions tell it to do this before acting and before ending a turn,
 and every YAAC tool result carries an unread count as a nudge. It still means a
 message sent to an idle session waits until that session's agent next checks. If
 your agent seems deaf, tell it to check the inbox.
-
-Automatic delivery is planned and needs client-specific support; see *Roadmap*.
-
-### Typo insurance
-
-Joining a channel nobody is on **creates** it, and the result says so:
-
-> Nobody was here, so this created the channel `'z combinator forun'`. Check with
-> the user that this is the name they meant.
-
-This is the only thing standing between a typo and sitting alone in an empty
-channel wondering why nobody answers.
 
 ### Direct by default
 
@@ -245,6 +225,8 @@ the choices, and `dev_connections()` lists them on demand.
 - Automatic takeover when the relaying session disappears, in a few seconds, with
   no user action and no configuration
 - `list_channels` from a session that has not joined anything, with no side effects
+- Runs on macOS and Linux; Windows support is in and awaiting confirmation on
+  real hardware
 
 ### Planned
 
@@ -261,94 +243,12 @@ underneath all of them, so nothing here changes the core.
 Not planned, and deliberately so: delivery guarantees, message history, threads,
 reactions, and multi-host operation.
 
-## Debugging
+## More
 
-```bash
-uv run pytest                                  # ~20 s
-uv run ruff check . && uv run ruff format .
-```
-
-**YAAC writes no files at all.** Everything — unread messages, rosters, who is on
-which channel — lives in memory and dies with the process. There is nothing to
-clean up after a crash, nothing to leak between sessions, and nothing to find on
-disk. Unread messages are lost if a session exits before collecting them, which is
-consistent with a v0 that makes no delivery guarantees.
-
-Each session logs to stderr, which your client will show as MCP server output:
-
-```
-[yaac] won the bind: this session is now wearing the hat on tcp://127.0.0.1:19116
-[yaac] hello: 'Колян' on 'z combinator forum' as b'01JZ...'
-[yaac] on air as 'Колян' on 'z combinator forum' (participant)
-```
-
-### Message format
-
-Every YAAC message begins with the same nine bytes:
-
-```
-{"yaac":1
-```
-
-That is a magic number and a version in one. A reader can tell a YAAC message from
-anything else, and tell which protocol version wrote it, without parsing a thing.
-Note there is no comma in that guarantee: a message carrying nothing but the
-version would end right there, so the format does not promise one.
-
-Receivers do not check those bytes, though — they check the parsed `yaac` field,
-which is what the format actually guarantees. A message with a version this build
-cannot read is dropped with a logged reason rather than misinterpreted.
-
-After it the header follows in a **fixed order**, with `body` always last, so
-`head -c 200` on a log shows the routing of every message however long the bodies
-get:
-
-```json
-{"yaac":1,"id":"01JZ…","ts":"2026-07-29T14:32:05Z","channel":"z combinator forum","from":{"name":"Диман","zmq_routing_id":"01JZ…"},"to":{"name":"Колян","zmq_routing_id":"01JZ…"},"body":"schema changed:\n  - renamed to recipient_group"}
-```
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `yaac` | int | Protocol version. Always first. |
-| `id` | string | ULID. Time-sortable, so lines sort chronologically. |
-| `ts` | string | UTC, second resolution. |
-| `channel` | string | Channel the message travelled on. |
-| `from` | address | Who sent it. Filled in by the relaying session, never by the sender. |
-| `to` | address or `null` | Recipient, or `null` if it was a broadcast. |
-| `body` | string | Whatever was sent, verbatim. Never parsed by YAAC. Always last. |
-
-Field order being fixed also makes the encoding byte-stable: the same content
-always produces the same bytes, whatever order the fields were built in. So a
-message has one identity, which could be hashed or signed later without changing
-the format.
-
-An **address** is an object rather than a bare name, so a participant can be
-identified more than one way:
-
-```json
-{"name": "Колян", "zmq_routing_id": "01JZ…"}
-```
-
-- `name` — what the user chose. Unique on a channel only while its holder is
-  connected, and reusable afterwards.
-- `zmq_routing_id` — identifies one connection, never reused. Unambiguous where a name
-  is not.
-
-Either locator addresses a recipient when sending. Further locators can be added
-as fields later without changing how anything parses, which a bare string could
-not have allowed.
-
-Failures arrive through the same path, distinguished by `"from": null` plus a
-`kind` rather than by a reserved name — every name is available to users,
-so none can be reserved for the protocol:
-
-```json
-{"yaac":1,"kind":"bounce","id":"01JZ…","from":null,"reason":"no such recipient on this channel"}
-```
-
-Nothing here is line-delimited: ZMQ frames carry explicit lengths, so a message is
-`[destination JSON][body]` going out and `[envelope JSON]` coming back, with no
-delimiter and no escaping needed to separate one message from the next.
+- [`docs/message-format.md`](docs/message-format.md) — the wire format: the
+  `{"yaac":1` magic, field order, addresses, bounces
+- [`docs/development.md`](docs/development.md) — running YAAC from a checkout,
+  debugging, an isolated development net
 
 ## Licence
 
