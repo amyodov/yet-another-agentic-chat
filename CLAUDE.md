@@ -53,8 +53,7 @@ bundle libzmq built without drafts (`zmq.has('draft')` is `False`). True anywher
 
 Replacements, both non-draft:
 - **Arrival**: the participant's DEALER monitor fires `EVENT_CONNECTED`, and the participant re-sends `hello`. Covers
-    the first
-  connect too, so whoever picks it up next is told who is present without asking.
+  the first connect too, so whoever picks up the hat next is told who is present without asking.
 - **Departure**: `ROUTER_MANDATORY` raises `EHOSTUNREACH` when sending to a routing id that left. Eviction is lazy,
   detected on the first failed send — which is when we want to bounce anyway.
 
@@ -87,13 +86,14 @@ on Windows instead, so exactly one ROUTER holds the endpoint on every OS.
 stdin. Better key than the cwd if v1 ever needs an out-of-process reader to find the right session, since it
 separates two sessions in one directory. Absent on Claude Desktop. Nothing uses it today.
 
-
 **Several memberships per process.** `Backend` holds a dict of `Membership`, each with its own routing id, DEALER,
 roster and inbox, so the hat sees them as unrelated participants and the protocol needed no change. This matters
 for clients running one server per application rather than per conversation, such as Claude Desktop — where it also
 means one conversation can address another's connection, so `check_inbox` requires the id rather than guessing.
 
 ## Message format
+
+The wire format itself is specified in `docs/message-format.md`; this section is the rules for code that touches it.
 
 `protocol.dumps` is the only serializer, and it stamps `yaac: PROTOCOL_VERSION` first on every top-level dict. That
 ordering is the point: every message opens with `{"yaac":1`, a magic number a reader can key on without parsing. No
@@ -152,17 +152,20 @@ or a malformed frame can trigger must `raise`.
 is being tested. Docs and examples may use any UTF-8; the README's Cyrillic name shows that names are
 unrestricted. Tool descriptions are mostly English but need not be only English.
 
-## Comments and docstrings
+## Prose
 
-Say what the mechanism, constraint, or failure mode is, with real names and numbers. Give reasons, not just steps —
-the next reader is as capable as you and needs the *why*, not an explanation of the obvious.
+These rules cover everything written in words: comments, docstrings, commit messages, docs — and this file.
 
-Use technical vocabulary freely: "asynchronous queue with exclusive locking" is exactly right. Do not reach for fancy
-general words where plain ones work — "think", not "ponder". No metaphors or slogans; the radio analogy lives in the
-README, not the source.
-
-Write "`ROUTER_MANDATORY` raises `EHOSTUNREACH` for an unknown routing id, so the send fails instead of being dropped",
-not "a stuck queue must fail, not grow silently".
+- Say what the mechanism, constraint, or failure mode is, with real names and numbers. Give the *why*; the *what*
+  is in the code, and the next reader is as capable as you.
+- Cover intent, not implementation. Text that restates the line below it says nothing and goes stale the first time
+  that line changes. If it is clear from the code, do not repeat it.
+- Technical vocabulary is free: "asynchronous queue with exclusive locking" is exactly right. Fancy general words
+  are not — "think", not "ponder". No metaphors or slogans; the radio analogy lives in the README, not the source.
+- Write "`ROUTER_MANDATORY` raises `EHOSTUNREACH` for an unknown routing id, so the send fails instead of being
+  dropped", not "a stuck queue must fail, not grow silently".
+- Commit messages: the subject names the change, the body gives the reason and what it displaces. Not a list of
+  files touched — the diff already shows that.
 
 ## Design notes
 
