@@ -192,7 +192,8 @@ These rules cover everything written in words: comments, docstrings, commit mess
 
 ## Decided, not built
 
-Settled in discussion with Alex; build only when told, ask before deviating.
+Settled in discussion with Alex; build only when told, ask before deviating. The envelope system is formalized in
+`docs/zmq.md` — that file is the spec, this section tracks the decisions and their open edges.
 
 - **Privacy is convention, not protection.** Everything runs on one machine under one user account, where any
   session can already read another's transcript from disk, so YAAC cannot add a boundary the OS does not have.
