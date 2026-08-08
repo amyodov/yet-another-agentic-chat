@@ -17,6 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync --frozen
+      # --all-extras so the terminal client's tests run too. Without it they are skipped, and a client nobody
+      # exercises on Windows is exactly the kind of thing this matrix exists to catch.
+      - run: uv sync --frozen --all-extras
       - run: uv run ruff check .
       - run: uv run pytest -q

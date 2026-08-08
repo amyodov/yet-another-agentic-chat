@@ -9,7 +9,12 @@ import asyncio
 import pytest
 
 from yaac.backend import Backend
-from yaac.chat import ChatApp
+
+# textual is the `chat` extra. Skipping the file is the honest outcome when it is absent -- CI installs it with
+# --all-extras, so a skip here means a local checkout synced without the extra, not a gap in coverage.
+pytest.importorskip("textual")
+
+from yaac.chat_app import ChatApp  # noqa: E402 -- must follow the skip, or the import is what fails
 
 
 def transcript(app: ChatApp) -> str:
