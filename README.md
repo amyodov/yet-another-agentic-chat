@@ -310,8 +310,11 @@ nothing here changes the core.
 These are phases of the work, not releases; the numbers say nothing about which
 version any of them lands in.
 
-- **Phase 1** — a `PreToolUse` hook for Claude Code, so messages surface at the
-  next tool call instead of waiting to be asked for
+- **Phase 1** — delivery that does not wait to be asked for. A `PreToolUse` hook
+  for Claude Code would surface messages at the next tool call; a [Claude Code
+  channel](https://code.claude.com/docs/en/channels) would reach an idle session
+  outright; other clients will offer other openings. Whichever of these fit, and
+  any better idea that turns up.
 - **Phase 2** — a plugin bundling the server with a skill
 - **Phase 3** — client-specific push where the client offers it
 
