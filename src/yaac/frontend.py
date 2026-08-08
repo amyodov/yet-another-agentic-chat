@@ -10,6 +10,10 @@ are added when the first membership opens and removed when the last one closes. 
 with `NotificationOptions()`, every flag false, and offers no way to override them, so `main` runs the low-level
 server directly. A server that advertises false and then sends the notification is correctly ignored.
 
+A client that ignores the notification would strand a session on a channel with no tools to use it, so for those
+the whole set is announced at launch instead -- see `CLIENTS_THAT_NEVER_RELIST`. Which client is on the other end
+is known from `clientInfo`, so this needs nothing from the user.
+
 Tool descriptions are read by the model on every session, so each is kept to one line plus the minimum context
 needed to use it correctly.
 
@@ -54,6 +58,18 @@ mcp = MCPServer(
 # created no files.
 _radio: Backend | None = None
 _endpoint: str = DEFAULT_ENDPOINT
+
+# Clients that do not implement notifications/tools/list_changed, keyed by the clientInfo.name they send at
+# initialize. They are given every tool at connect, because a tool published later is one they will never see.
+#
+# The notification has been part of MCP since 2024-11-05, so this compensates for a client rather than working
+# around the protocol. Codex is the one: https://github.com/openai/codex/issues/10105, open since January 2026,
+# with a working fix closed unmerged (https://github.com/openai/codex/pull/12449). Without this, a Codex session
+# could join a channel and then hold a membership it has no send or check_inbox to use.
+CLIENTS_THAT_NEVER_RELIST = frozenset({"codex-mcp-client"})
+
+# Set once the on-air tools are listed for good, which makes join and leave stop moving them.
+_all_tools_announced = False
 
 
 def radio() -> Backend:
@@ -145,7 +161,7 @@ async def join_channel(
             "next_step": "Ask the user for a different name; do not choose one yourself.",
         }
 
-    if len(radio().memberships) == 1:  # notify only when the tool set actually changes
+    if not _all_tools_announced and len(radio().memberships) == 1:  # notify only when the tool set actually changes
         await _publish_on_air_tools(ctx)
     response: dict[str, Any] = {
         "joined": result.channel,
@@ -156,13 +172,15 @@ async def join_channel(
         "reminder": (
             "Nothing arrives on its own. Call check_inbox before acting on anything and again before ending your turn."
         ),
+    }
+    if not _all_tools_announced:
         # Published by notification, so the client may need a moment to re-fetch tools/list. Saying they exist
-        # outright invites a call that fails while the list is still the old one.
-        "new_tools": (
+        # outright invites a call that fails while the list is still the old one. A client that was given
+        # everything at launch has nothing to wait for.
+        response["new_tools"] = (
             "send, check_inbox, peers and leave_channel are being published now. If they are not "
             "listed yet, look again before assuming they are missing."
-        ),
-    }
+        )
     if result.created:
         # A mistyped channel name silently produces a new empty channel, which is indistinguishable from a correct
         # one until nobody replies. Reporting creation is what makes that case detectable.
@@ -258,7 +276,7 @@ async def leave_channel(ctx: Context, connection_id: CONNECTION_ID = None) -> di
         membership = await radio().disconnect(connection_id)
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
-    if not radio().on_air:
+    if not _all_tools_announced and not radio().on_air:
         await _withdraw_on_air_tools(ctx)
     return {
         "status": "left",
@@ -293,6 +311,36 @@ async def _withdraw_on_air_tools(ctx: Context) -> None:
         with contextlib.suppress(Exception):
             mcp.remove_tool(tool.__name__)
     await _announce_tool_change(ctx)
+
+
+def _announce_all_tools() -> None:
+    """List every tool from now on, for a client that would never notice one appearing later."""
+    global _all_tools_announced
+    _all_tools_announced = True
+    for tool in ON_AIR_TOOLS:
+        mcp.add_tool(tool)
+
+
+def _adapt_tool_list_to_client() -> None:
+    """Wrap tools/list so the answer can depend on who is asking.
+
+    `clientInfo` arrives with initialize, which the runner owns and refuses to share -- it raises rather than let
+    a handler be registered for it. The first tools/list is therefore the earliest moment the client's name is
+    both known and still able to change the answer, and it is the only request that has to be right.
+    """
+    low = mcp._lowlevel_server
+    if (listing := low.get_request_handler("tools/list")) is None:
+        raise RuntimeError("no tools/list handler is registered; the MCP SDK changed shape underneath us")
+
+    async def adapt(ctx, params):
+        client = ctx.session.client_params
+        name = client.client_info.name if client else None
+        if not _all_tools_announced and name in CLIENTS_THAT_NEVER_RELIST:
+            log(f"client is {name!r}, which does not act on tools/list_changed; listing every tool up front")
+            _announce_all_tools()
+        return await listing.handler(ctx, params)
+
+    low.add_request_handler("tools/list", listing.params_type, adapt)
 
 
 async def _announce_tool_change(ctx: Context) -> None:
@@ -352,6 +400,7 @@ async def _serve() -> None:
     """
     low = mcp._lowlevel_server
     options = low.create_initialization_options(NotificationOptions(tools_changed=True))
+    _adapt_tool_list_to_client()
     async with stdio.stdio_server() as (read, write):
         await low.run(read, write, options)
 

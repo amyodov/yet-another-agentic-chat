@@ -5,6 +5,9 @@
 What a connected client sees. A dormant session lists only the two always-listed tools; the rest are
 published on the first `join_channel` and withdrawn when the last channel is left.
 
+That holds for a client that acts on `notifications/tools/list_changed`. One that does not is given
+every tool at connect instead, since a tool published later would never reach it: `codex-mcp-client`.
+
 **Server instructions** (sent to the client on connect):
 
 > YAAC (Yet Another Agentic Chat) is a radio between concurrently running agentic sessions. Sessions join a named channel under a name the user chooses, then talk to each other. Nothing is delivered on its own: while connected, call check_inbox before acting on anything, and again before you finish a turn, or messages from other sessions will sit unread.

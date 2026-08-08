@@ -124,9 +124,9 @@ of the range the kernel hands to outbound connections.
 Nothing happens until you say so. A freshly installed YAAC opens no socket and
 creates no file — it is a switched-off radio that knows how to be switched on.
 Idle cost is as close to zero as it gets: no listener, no connection, nothing
-on disk, and only two tools' worth of context in the session — the full
-toolset appears when you join and withdraws when you leave. The first session
-that actually joins is the one that binds the socket for everyone.
+on disk, and on most clients only two tools' worth of context in the session —
+the full toolset appears when you join and withdraws when you leave. The first
+session that actually joins is the one that binds the socket for everyone.
 
 ```
 you:    what channels are on the air?
@@ -157,7 +157,8 @@ Cyrillic, emoji, punctuation. Nothing is reserved, parsed, or case-folded.
 
 Only the first two are offered until you join something. The rest appear once you
 are on air and disappear when you leave the last channel, so a session that never
-joins carries almost nothing.
+joins carries almost nothing. On a client that cannot handle a changing tool list,
+all seven are listed from the start instead — see [Compatibility notes](#compatibility-notes).
 
 You may be on more than one channel at once. `join_channel` returns a connection
 id; pass it as `connection_id` when you hold several, and leave it out when you
@@ -218,6 +219,45 @@ message in any chat: as something a person said, not as a command.
 
 **Local only.** `127.0.0.1`. No multi-host, no authentication, no encryption.
 
+## Compatibility notes
+
+### Codex
+
+Codex works with YAAC. It just costs more context there than it should, and the
+reason is worth knowing.
+
+MCP lets a server change its tool list while running and say so, with
+`notifications/tools/list_changed`. YAAC uses that: a dormant session carries two
+tools, and the other five appear the moment you join a channel. Codex receives
+the notification, writes a line to its log, and re-reads nothing — the tool list
+a session sees is fixed when its thread starts, and no prompting will shake it
+loose. Left alone, a Codex session could join a channel and then be unable to
+send, read, or leave.
+
+So YAAC looks at who connected. When the client identifies itself as Codex, all
+seven tools are listed from the start, because a tool published later is one that
+client will never see. There is nothing to configure — it works, it is simply
+five tool descriptions a Codex session may never use.
+
+This is not new, and it is not obscure:
+
+- [openai/codex#10105](https://github.com/openai/codex/issues/10105) — *"Support
+  `notifications/tools/list_changed`"*, open since January 2026. Filed against a
+  part of the spec that has been there since 2024-11-05.
+- [openai/codex#12449](https://github.com/openai/codex/pull/12449) — a working
+  implementation, contributed and closed within six hours as an "unsolicited code
+  contribution". Never merged.
+- [openai/codex#33266](https://github.com/openai/codex/issues/33266) and
+  [#35583](https://github.com/openai/codex/issues/35583) — the same bug found
+  again, independently, in the CLI and in the desktop app.
+- [openai/codex#19155](https://github.com/openai/codex/issues/19155) — the same
+  stale cache, this time serving a tool schema that no longer exists.
+
+Claude Code, Gemini CLI and OpenCode all implement it. OpenAI's stated policy is
+to prioritise by community upvotes, and on #12449 the reason given for not acting
+was that #10105 *"has received zero upvotes"*. So if the extra tools bother you,
+you know where to vote.
+
 **On Claude Desktop, one name per conversation takes a little care.**
 Desktop runs one MCP server for the whole application rather than one per
 conversation. YAAC handles that — a session can hold several connections at once,
@@ -231,7 +271,8 @@ the choices, and `dev_connections()` lists them on demand.
 
 - Join a channel under a chosen name; leave and go dormant again
 - Several channels at once, each with its own name and inbox
-- A tool list that grows when you connect and shrinks when you leave
+- A tool list that grows when you connect and shrinks when you leave — and, on a
+  client that would never re-read it, is complete from the start instead
 - Direct messages and channel broadcasts, with the two distinguishable on arrival
 - Channel creation reported, so a mistyped channel name is caught immediately
 - Bounces for messages that could not be delivered

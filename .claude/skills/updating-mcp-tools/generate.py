@@ -43,6 +43,7 @@ def main() -> None:
         # here uses the same path `join_channel` uses at runtime, so their schemas come out identical to the wire.
         mcp.add_tool(fn)
 
+    clients = ", ".join(f"`{name}`" for name in sorted(frontend.CLIENTS_THAT_NEVER_RELIST))
     lines = [
         "# MCP tools",
         "",
@@ -50,6 +51,9 @@ def main() -> None:
         "",
         "What a connected client sees. A dormant session lists only the two always-listed tools; the rest are",
         "published on the first `join_channel` and withdrawn when the last channel is left.",
+        "",
+        "That holds for a client that acts on `notifications/tools/list_changed`. One that does not is given",
+        f"every tool at connect instead, since a tool published later would never reach it: {clients}.",
         "",
         "**Server instructions** (sent to the client on connect):",
         "",

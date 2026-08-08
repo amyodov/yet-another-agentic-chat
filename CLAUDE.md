@@ -73,6 +73,19 @@ check what `initialize` claimed first.
 So the tool list is dynamic: dormant sessions list `list_channels` and `join_channel`, the other five appear on first
 join and go on last leave.
 
+**Not every client implements `tools/list_changed`, though it has been in MCP since 2024-11-05.** One that ignores
+it would be stranded on a channel with tools it can never see, so `CLIENTS_THAT_NEVER_RELIST` in `frontend.py`
+names the exceptions and hands them everything at connect; conforming clients keep the dynamic list. The key is
+`clientInfo.name`, read off the wire with a probe server rather than guessed — check the same way before adding a
+name. Which clients, and the upstream bugs, are in the comment there and in the README.
+
+Detection wraps the `tools/list` handler: `initialize` is reserved by the SDK runner, which raises if
+`add_request_handler` is given it, and the first listing is the earliest point where the client's name is known
+and can still change the answer. `Server.middleware` would be tidier, and the SDK marks it provisional.
+
+Cross-client delivery is measured, not argued: a Claude Code session and a Codex session exchanged messages both
+ways on one channel, each running its own server process.
+
 **MCP cannot push into an idle session.** Nothing in the server→client set (`notifications/message`,
 `resources/updated`, `list_changed`, `sampling/createMessage`, `elicitation/create`) reaches the model's context.
 Delivery is pull-only, so the tool descriptions have to carry the reminder to call `check_inbox`.

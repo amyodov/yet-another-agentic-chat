@@ -70,20 +70,27 @@ def decode(stdout: bytes) -> list[dict]:
     return [json.loads(line) for line in stdout.decode().splitlines() if line.strip()]
 
 
-HANDSHAKE = [
-    {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": {"name": "test", "version": "0"},
+def handshake(client_name: str = "test") -> list[dict]:
+    """Initialize, confirm, and list -- as the named client. The name decides whether the tool list may change."""
+    return [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": client_name, "version": "0"},
+            },
         },
-    },
-    {"jsonrpc": "2.0", "method": "notifications/initialized"},
-    {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-]
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    ]
+
+
+HANDSHAKE = handshake()
+DORMANT_TOOLS = {"list_channels", "join_channel"}
+EVERY_TOOL = DORMANT_TOOLS | {"send", "check_inbox", "peers", "leave_channel", "dev_connections"}
 
 
 async def test_startup_writes_only_json_rpc_to_stdout(endpoint: str) -> None:
@@ -131,10 +138,18 @@ async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint: str, t
     assert list(runtime.iterdir()) == []
 
 
-async def test_a_dormant_session_lists_only_the_two_tools_it_can_honour(endpoint: str) -> None:
+@pytest.mark.parametrize(
+    "client_name,expected",
+    [("test", DORMANT_TOOLS), ("codex-mcp-client", EVERY_TOOL)],
+    ids=["acts-on-the-notification", "ignores-it"],
+)
+async def test_the_dormant_tool_surface_is_what_this_client_can_act_on(
+    endpoint: str, client_name: str, expected: set[str]
+) -> None:
     """A dormant server runs in every session the user has, so its tool surface is the whole cost it imposes on the
-    sessions that never join a channel."""
-    stdout, _ = await run_server(endpoint, HANDSHAKE)
+    sessions that never join a channel. Paying that cost only buys something on a client that re-reads the list;
+    on one that does not, a withheld tool is withheld for the whole session."""
+    stdout, _ = await run_server(endpoint, handshake(client_name))
     [init] = [m["result"] for m in decode(stdout) if m.get("id") == 1]
     [tools] = [m["result"]["tools"] for m in decode(stdout) if m.get("id") == 2]
 
@@ -142,12 +157,25 @@ async def test_a_dormant_session_lists_only_the_two_tools_it_can_honour(endpoint
     # false and then sending the notification is correctly ignored, which is what made an earlier version of this
     # code look as though the client were at fault.
     assert init["capabilities"]["tools"] == {"listChanged": True}
-    assert {t["name"] for t in tools} == {"list_channels", "join_channel"}
+    assert {t["name"] for t in tools} == expected
     # Tool descriptions are read by a model on every session; an undescribed tool is one it will misuse.
     assert [t["name"] for t in tools if not t["description"].strip()] == []
 
 
-async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws_them(endpoint: str) -> None:
+@pytest.mark.parametrize(
+    "client_name,after_leaving,notifications",
+    [
+        ("test", DORMANT_TOOLS, ["notifications/tools/list_changed"] * 2),
+        ("codex-mcp-client", EVERY_TOOL, []),
+    ],
+    ids=["acts-on-the-notification", "ignores-it"],
+)
+async def test_the_tool_list_only_moves_for_a_client_that_would_notice(
+    endpoint: str, client_name: str, after_leaving: set[str], notifications: list[str]
+) -> None:
+    """Going on air adds five tools and leaving takes them back, announced each way. For a client that never
+    re-reads the list there is nothing to announce: it was given everything at launch and keeps it, so a
+    notification would only claim a change the client cannot see and the withdrawal would be permanent."""
     connect = {
         "jsonrpc": "2.0",
         "id": 3,
@@ -157,21 +185,16 @@ async def test_connecting_publishes_the_on_air_tools_and_disconnecting_withdraws
     listing = {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
     leave = {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "leave_channel", "arguments": {}}}
     final = {"jsonrpc": "2.0", "id": 6, "method": "tools/list"}
-    stdout, _ = await run_server(endpoint, HANDSHAKE + [connect, listing, leave, final])
+    stdout, _ = await run_server(endpoint, handshake(client_name) + [connect, listing, leave, final])
     messages = decode(stdout)
 
     def listed(request_id):
         [tools] = [m["result"]["tools"] for m in messages if m.get("id") == request_id]
         return {t["name"] for t in tools}
 
-    on_air = {"list_channels", "join_channel", "send", "check_inbox", "peers", "leave_channel", "dev_connections"}
-    assert listed(4) == on_air
-    assert listed(6) == {"list_channels", "join_channel"}
-    # One notification when the tools appear, one when they go.
-    assert [m["method"] for m in messages if m.get("method")] == [
-        "notifications/tools/list_changed",
-        "notifications/tools/list_changed",
-    ]
+    assert listed(4) == EVERY_TOOL
+    assert listed(6) == after_leaving
+    assert [m["method"] for m in messages if m.get("method")] == notifications
 
 
 @pytest.mark.parametrize(
