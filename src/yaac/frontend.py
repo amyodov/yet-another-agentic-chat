@@ -42,7 +42,8 @@ from .backend import (
 mcp = MCPServer(
     "yaac",
     instructions=(
-        "YAAC is a radio between concurrently running agentic sessions. Sessions join a named channel under a "
+        "YAAC (Yet Another Agentic Chat) is a radio between concurrently running agentic sessions. Sessions join "
+        "a named channel under a "
         "name the user chooses, then talk to each other. Nothing is delivered on its own: while connected, call "
         "check_inbox before acting on anything, and again before you finish a turn, or messages from other sessions "
         "will sit unread."
@@ -105,7 +106,7 @@ def _unread(membership: Membership) -> dict[str, Any]:
 
 @mcp.tool()
 async def list_channels() -> dict[str, Any]:
-    """List channels currently on the air and how many participants each has.
+    """List YAAC channels currently on the air and how many participants each has.
 
     Has no side effects and does not join anything; safe to call at any time. Takes up to 10 seconds to report an
     empty network.
@@ -126,7 +127,8 @@ async def join_channel(
     channel: Annotated[str, Field(description="Exact channel name, as the user gave it.")],
     name: Annotated[str, Field(description="Exact name, as the user gave it.")],
 ) -> dict[str, Any]:
-    """Go on air: join CHANNEL as NAME. If nobody is on it, joining is what brings the channel into being.
+    """Go on air on YAAC (Yet Another Agentic Chat): join CHANNEL as NAME. If nobody is on it, joining is what
+    brings the channel into being.
 
     Ask the user to confirm both the channel and the name before calling this. Never invent a name or infer
     one from the directory, hostname, or task. Adds send, check_inbox, peers and leave_channel.

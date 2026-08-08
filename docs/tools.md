@@ -7,11 +7,12 @@ published on the first `join_channel` and withdrawn when the last channel is lef
 
 **Server instructions** (sent to the client on connect):
 
-> YAAC is a radio between concurrently running agentic sessions. Sessions join a named channel under a name the user chooses, then talk to each other. Nothing is delivered on its own: while connected, call check_inbox before acting on anything, and again before you finish a turn, or messages from other sessions will sit unread.
+> YAAC (Yet Another Agentic Chat) is a radio between concurrently running agentic sessions. Sessions join a named channel under a name the user chooses, then talk to each other. Nothing is delivered on its own: while connected, call check_inbox before acting on anything, and again before you finish a turn, or messages from other sessions will sit unread.
 
 ## `join_channel` — always listed
 
-Go on air: join CHANNEL as NAME. If nobody is on it, joining is what brings the channel into being.
+Go on air on YAAC (Yet Another Agentic Chat): join CHANNEL as NAME. If nobody is on it, joining is what
+brings the channel into being.
 
 Ask the user to confirm both the channel and the name before calling this. Never invent a name or infer
 one from the directory, hostname, or task. Adds send, check_inbox, peers and leave_channel.
@@ -26,7 +27,7 @@ every turn, or you are deaf on the channel.
 
 ## `list_channels` — always listed
 
-List channels currently on the air and how many participants each has.
+List YAAC channels currently on the air and how many participants each has.
 
 Has no side effects and does not join anything; safe to call at any time. Takes up to 10 seconds to report an
 empty network.

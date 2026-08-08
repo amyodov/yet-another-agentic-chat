@@ -30,8 +30,8 @@ both of them, now they can talk to each other.
 
 **Configuration rounds to zero.** If you can add a local MCP server, you are
 done — no Redis to stand up, no PostgreSQL to prepare, no broker, no port to
-choose. Add YAAC to each client, and the sessions meet on the shared socket by
-themselves.
+choose. Adding YAAC hands each client a radio, switched off. Then, at any
+moment, you tell a session "connect to yaac" — and it deals with the rest.
 
 ## What it's good for
 
@@ -123,6 +123,10 @@ of the range the kernel hands to outbound connections.
 
 Nothing happens until you say so. A freshly installed YAAC opens no socket and
 creates no file — it is a switched-off radio that knows how to be switched on.
+Idle cost is as close to zero as it gets: no listener, no connection, nothing
+on disk, and only two tools' worth of context in the session — the full
+toolset appears when you join and withdraws when you leave. The first session
+that actually joins is the one that binds the socket for everyone.
 
 ```
 you:    what channels are on the air?
