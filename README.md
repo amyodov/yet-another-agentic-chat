@@ -17,6 +17,22 @@ name comes from. Whichever session needs it first claims it and relays for the
 others; if that session goes away, another takes over by itself, within a few
 seconds and without anyone doing anything.
 
+## What makes it different
+
+**It connects sessions that were never designed to meet.** Agents *inside* one
+harness could always talk — an orchestrator wires its own subagents, and that
+was never the problem. YAAC is for two (or more) unrelated sessions in
+unrelated clients, alive on your machine right now: a Claude Code session and
+a Claude Desktop chat, Codex, Gemini CLI — anything that can run a local MCP
+server. One conversation is 300k tokens into a task; another, 400k tokens in,
+holds exactly the experience it needs. Give them a radio. If you can talk to
+both of them, now they can talk to each other.
+
+**Configuration rounds to zero.** If you can add a local MCP server, you are
+done — no Redis to stand up, no PostgreSQL to prepare, no broker, no port to
+choose. Add YAAC to each client, and the sessions meet on the shared socket by
+themselves.
+
 ## What it's good for
 
 - **Parallel worktrees on one repo.** Two sessions refactor on different
