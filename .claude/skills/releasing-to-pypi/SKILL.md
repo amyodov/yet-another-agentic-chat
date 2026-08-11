@@ -59,6 +59,18 @@ Creating the release is the publish trigger — after this line, the release is 
 
 - If the install surface changed (entry points, commands), update the README's install section to match what
   the released version actually supports — the README must never advertise unreleased behavior.
+- Nudge Context7, which otherwise re-crawls a project of this size only every 45 days, so its answers would
+  describe the previous release for weeks:
+
+  ```bash
+  curl -fsS -X POST https://context7.com/api/v1/refresh \
+    -H "Authorization: Bearer $CONTEXT7_API_KEY" \
+    -d 'libraryId=/amyodov/yet-another-agentic-chat'
+  ```
+
+  Skip it if `CONTEXT7_API_KEY` is unset -- the key comes from context7.com/dashboard and is not required to
+  release. If the install surface changed, re-read the `rules` in `context7.json` too: they are printed verbatim
+  ahead of every answer Context7 gives about YAAC, so a stale one is wrong in public and invisible here.
 - Check `docs/tools.md` is current (the `updating-mcp-tools` skill regenerates it) — the released docs should
   describe the released tools.
 - Update the README's Status section if the release shipped or deferred features; it is the only feature record.

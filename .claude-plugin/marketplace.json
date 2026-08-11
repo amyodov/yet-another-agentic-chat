@@ -12,7 +12,7 @@
     {
       "name": "yaac",
       "source": "./plugin",
-      "description": "YAAC: Yet Another Agentic Chat. A zero-infrastructure MCP messaging between concurrent agentic sessions.",
+      "description": "Messaging between concurrent AI coding sessions, across clients, over MCP. Zero infrastructure. (YAAC: Yet Another Agentic Chat.)",
       "version": "0.2.0",
       "author": {
         "name": "Alex Myodov"

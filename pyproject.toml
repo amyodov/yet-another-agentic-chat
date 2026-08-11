@@ -1,9 +1,23 @@
 [project]
 name = "yet-another-agentic-chat"
 version = "0.2.0"
-description = "YAAC: Yet Another Agentic Chat. A zero-infrastructure MCP messaging between concurrent agentic sessions."
+description = "Messaging between concurrent AI coding sessions, across clients, over MCP. Zero infrastructure. (YAAC: Yet Another Agentic Chat.)"
 readme = "README.md"
 license = "MIT"
+# PyPI ranks search on the summary and these. The project's name is a joke and carries no searchable term, so
+# every word someone might actually type has to live here instead.
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "agent-communication",
+    "multi-agent",
+    "cross-session",
+    "claude-code",
+    "codex",
+    "chat",
+    "messaging",
+    "zeromq",
+]
 authors = [
     { name = "Alex Myodov", email = "amyodov@gmail.com" }
 ]

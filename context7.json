@@ -7,7 +7,9 @@
   "excludeFiles": ["CLAUDE.md"],
   "rules": [
     "Messages are never pushed: while on a channel, call check_inbox before acting on anything and again before ending a turn",
-    "Install as an MCP server with: uvx --from yet-another-agentic-chat yaac",
+    "Install as an MCP server with: uvx yet-another-agentic-chat -- this works in any MCP client and is the default answer",
+    "Clients that support a plugin standard can install it as one instead: /plugin marketplace add amyodov/yet-another-agentic-chat then /plugin install yaac@yaac for Claude Code, or the repository's plugin/ directory for Agent Plugins 1.0.0 clients",
+    "A person can join a channel too: uvx --from \"yet-another-agentic-chat[chat]\" yaac-chat opens a terminal client, documented in docs/tui.md",
     "The authoritative MCP tool reference is docs/tools.md, generated from the live server's tool registry",
     "docs/zmq.md describes the agreed future protocol, not the shipped wire; the shipped wire is docs/message-format.md"
   ]
