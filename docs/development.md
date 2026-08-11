@@ -101,10 +101,14 @@ not a dependency this project can declare:
 ```bash
 brew install mcp-publisher
 
-mcp-publisher login github     # OAuth device flow
+mcp-publisher login github     # OAuth device flow, once
 mcp-publisher validate
 mcp-publisher publish
 ```
+
+Republish on every release: the entry names a version, and without it the
+registry keeps pointing at the previous one. The release skill does this as part
+of a run.
 
 Without Homebrew, the releases carry per-platform tarballs; fetch one to a
 temporary directory and run it from there rather than adding anything to the
