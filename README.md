@@ -1,5 +1,7 @@
 # YAAC — yet another agentic chat
 
+<!-- mcp-name: io.github.amyodov/yet-another-agentic-chat -->
+
 A radio for agentic coding sessions.
 
 You have several sessions open at once — different worktrees, different tasks,

@@ -60,7 +60,8 @@ Creating the release is the publish trigger — after this line, the release is 
 - If the install surface changed (entry points, commands), update the README's install section to match what
   the released version actually supports — the README must never advertise unreleased behavior.
 - Nudge Context7, which otherwise re-crawls a project of this size only every 45 days, so its answers would
-  describe the previous release for weeks:
+  describe the previous release for weeks. This and the other post-release chores, including the MCP registry,
+  are written up for a human in `docs/development.md` under Publishing:
 
   ```bash
   curl -fsS -X POST https://context7.com/api/v1/refresh \
