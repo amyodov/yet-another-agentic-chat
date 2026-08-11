@@ -7,6 +7,7 @@ and that the two standards agree with each other about what they are installing.
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,7 @@ def test_the_generator_writes_every_file_the_two_standards_need(generated) -> No
         "plugin/.claude-plugin/plugin.json",
         "plugin/.mcp.json",
         ".claude-plugin/marketplace.json",
+        "server.json",
     }
 
 
@@ -51,6 +53,7 @@ def test_the_generator_writes_every_file_the_two_standards_need(generated) -> No
         "plugin/.claude-plugin/plugin.json",
         "plugin/.mcp.json",
         ".claude-plugin/marketplace.json",
+        "server.json",
     ],
 )
 def test_the_manifests_on_disk_are_current(generated, path: str) -> None:
@@ -82,6 +85,9 @@ def test_the_version_matches_the_package(generated) -> None:
     for path in ("plugin/plugin.json", "plugin/.claude-plugin/plugin.json"):
         assert json.loads(rendered[path])["version"] == version
     assert json.loads(rendered[".claude-plugin/marketplace.json"])["plugins"][0]["version"] == version
+    server = json.loads(rendered["server.json"])
+    assert server["version"] == version
+    assert server["packages"][0]["version"] == version
 
 
 def test_the_bundled_skill_is_discoverable(generated) -> None:
@@ -92,3 +98,26 @@ def test_the_bundled_skill_is_discoverable(generated) -> None:
     frontmatter = skill.split("---", 2)[1]
     assert "name: yaac" in frontmatter
     assert "description:" in frontmatter
+
+
+def test_the_registry_entry_fits_what_the_registry_accepts(generated) -> None:
+    """server.schema.json caps description at 100 characters and constrains the name, and the namespace is not
+    ours to choose: GitHub authentication only grants io.github.<user>/*, so anything else is rejected at publish
+    time rather than at review time."""
+    _, rendered = generated
+    server = json.loads(rendered["server.json"])
+    assert len(server["description"]) <= 100
+    assert len(server["title"]) <= 100
+    assert re.fullmatch(r"[a-zA-Z0-9.-]+/[a-zA-Z0-9._-]+", server["name"])
+    assert server["name"].startswith("io.github.amyodov/")
+    assert server["packages"][0]["registryType"] == "pypi"
+    assert server["packages"][0]["identifier"] == "yet-another-agentic-chat"
+    assert server["packages"][0]["transport"] == {"type": "stdio"}
+
+
+def test_the_readme_carries_the_ownership_marker(generated) -> None:
+    """The registry proves ownership of a PyPI package by finding this in the published package description. It
+    has to match the server name exactly, and it has to be in a release, not merely in git."""
+    _, rendered = generated
+    name = json.loads(rendered["server.json"])["name"]
+    assert f"mcp-name: {name} -->" in (REPO / "README.md").read_text()

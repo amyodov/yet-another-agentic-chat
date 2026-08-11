@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.amyodov/yet-another-agentic-chat",
+  "title": "YAAC",
+  "description": "Messaging between concurrent AI coding sessions, across clients, over MCP. Zero infrastructure.",
+  "version": "0.2.0",
+  "websiteUrl": "https://github.com/amyodov/yet-another-agentic-chat",
+  "repository": {
+    "url": "https://github.com/amyodov/yet-another-agentic-chat",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "yet-another-agentic-chat",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

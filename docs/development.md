@@ -110,9 +110,13 @@ Without Homebrew, the releases carry per-platform tarballs; fetch one to a
 temporary directory and run it from there rather than adding anything to the
 checkout.
 
-The server name is `io.github.amyodov/yet-another-agentic-chat`; GitHub
-authentication grants `io.github.<user>/*`, and an organisation namespace needs
-Owner rights on that organisation rather than mere membership.
+`server.json` is generated alongside the plugin manifests, so its version tracks
+the release rather than being typed in. The name is
+`io.github.amyodov/yet-another-agentic-chat`: GitHub authentication grants
+`io.github.<user>/*`, and an organisation namespace needs Owner rights on that
+organisation rather than mere membership. The registry caps `description` at 100
+characters where PyPI does not, which is why that one line is written separately
+from the project's own.
 
 **The ordering trap:** the registry proves ownership of a PyPI package by
 finding an `mcp-name:` string in the package *description* — that is, in the
