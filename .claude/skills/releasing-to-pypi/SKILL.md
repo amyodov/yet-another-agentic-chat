@@ -26,7 +26,14 @@ rather than improvising past it.
 
 ## 2. Version bump
 
-Set `version = "$1"` in `pyproject.toml`, run `uv sync` so `uv.lock` follows, and commit both. The version in
+Set `version = "$1"` in `pyproject.toml`, run `uv sync` so `uv.lock` follows, then regenerate the plugin
+manifests, which carry the version too:
+
+```bash
+uv run python ${CLAUDE_SKILL_DIR}/generate_plugin.py
+```
+
+Commit all of it together. The version in
 the code and the version being tagged must be the same string — a wheel that reports a different version than
 its tag is a support puzzle nobody needs.
 

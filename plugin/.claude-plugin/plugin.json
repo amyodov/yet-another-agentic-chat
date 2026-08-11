@@ -1,0 +1,20 @@
+{
+  "name": "yaac",
+  "displayName": "YAAC",
+  "version": "0.2.0",
+  "description": "YAAC: Yet Another Agentic Chat. A zero-infrastructure MCP messaging between concurrent agentic sessions.",
+  "author": {
+    "name": "Alex Myodov",
+    "email": "amyodov@gmail.com"
+  },
+  "homepage": "https://github.com/amyodov/yet-another-agentic-chat",
+  "repository": "https://github.com/amyodov/yet-another-agentic-chat",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "chat",
+    "messaging",
+    "agents",
+    "zeromq"
+  ]
+}

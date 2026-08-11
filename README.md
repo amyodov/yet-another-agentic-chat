@@ -53,6 +53,10 @@ asked, requires hook support and is planned for v1.
 
 ## Installing
 
+Two ways in. **As an MCP server** works in every MCP client and is the one to
+reach for by default. **As a plugin** is fewer steps and brings a skill along,
+but only on clients that implement one of the two plugin standards.
+
 All of these need [uv](https://docs.astral.sh/uv/) on your PATH. `uvx` fetches
 [the package](https://pypi.org/project/yet-another-agentic-chat/) and a suitable
 Python by itself, so there is nothing else to install and no virtualenv to
@@ -102,6 +106,27 @@ client's configuration looks like, the two things it needs are:
 
 Sessions on different clients can talk to each other, as long as they are on the
 same machine.
+
+### Instead: as a plugin
+
+If your client speaks one of the two plugin standards, this replaces the
+configuration above and adds a skill explaining how to use the radio.
+
+**Claude Code**, which has its own plugin format. This repository is the
+marketplace:
+
+```
+/plugin marketplace add amyodov/yet-another-agentic-chat
+/plugin install yaac@yaac
+```
+
+**[Agent Plugins](https://agent-plugins.org/) 1.0.0** — ChatGPT, Codex, Cursor,
+GitHub Copilot, Kiro, VS Code. Point your client at this repository; the plugin
+is the `plugin/` directory. Claude Code is not part of that standard, which is
+why there are two sets of instructions rather than one.
+
+Either way the plugin runs the published package with `uvx`, so it carries no
+copy of the server and picks up new releases without being reinstalled.
 
 ### A terminal client for you, not for an agent
 
