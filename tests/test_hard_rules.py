@@ -264,3 +264,17 @@ async def test_check_inbox_will_not_read_an_inbox_it_was_not_given(
     # that lost its id can recover rather than guess.
     if arguments:
         assert "open_connections" in body
+
+
+def test_no_python_file_reads_or_writes_text_without_naming_the_encoding() -> None:
+    """Windows defaults to cp1252, not UTF-8, so reading a file without naming an encoding decodes bytes it cannot
+    represent and dies -- which is how a README containing an em dash took a release-blocking CI run down. The
+    failure is invisible on macOS and Linux, where the default is UTF-8, so only a rule catches it."""
+    offenders = []
+    for path in REPO.rglob("*.py"):
+        if ".venv" in path.parts or "__pycache__" in path.parts:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if ("read_text(" in line or "write_text(" in line) and "encoding=" not in line:
+                offenders.append(f"{path.relative_to(REPO)}:{number}")
+    assert offenders == []

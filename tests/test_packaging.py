@@ -60,7 +60,7 @@ def test_the_manifests_on_disk_are_current(generated, path: str) -> None:
     """A version lives in pyproject.toml and in three manifests. Nobody keeps four copies in step by hand, so a
     forgotten regeneration fails here rather than shipping a plugin that claims the wrong version."""
     _, rendered = generated
-    assert (REPO / path).read_text() == rendered[path]
+    assert (REPO / path).read_text(encoding="utf-8") == rendered[path]
 
 
 def test_both_standards_install_the_same_server(generated) -> None:
@@ -93,7 +93,7 @@ def test_the_version_matches_the_package(generated) -> None:
 def test_the_bundled_skill_is_discoverable(generated) -> None:
     """Both standards find skills at skills/<name>/SKILL.md, so one directory serves both. A skill without
     frontmatter name and description is one no client will offer."""
-    skill = (REPO / "plugin" / "skills" / "yaac" / "SKILL.md").read_text()
+    skill = (REPO / "plugin" / "skills" / "yaac" / "SKILL.md").read_text(encoding="utf-8")
     assert skill.startswith("---\n")
     frontmatter = skill.split("---", 2)[1]
     assert "name: yaac" in frontmatter
@@ -120,4 +120,4 @@ def test_the_readme_carries_the_ownership_marker(generated) -> None:
     has to match the server name exactly, and it has to be in a release, not merely in git."""
     _, rendered = generated
     name = json.loads(rendered["server.json"])["name"]
-    assert f"mcp-name: {name} -->" in (REPO / "README.md").read_text()
+    assert f"mcp-name: {name} -->" in (REPO / "README.md").read_text(encoding="utf-8")
