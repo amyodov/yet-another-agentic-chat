@@ -18,3 +18,28 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv build
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+      # The registry proves ownership by reading the package description off PyPI, so it has to see the release
+      # that was just uploaded rather than the one before it.
+      - name: Wait for PyPI to serve this version
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          for _ in $(seq 1 30); do
+            got=$(curl -sS https://pypi.org/pypi/yet-another-agentic-chat/json |
+                  python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
+            [ "$got" = "$want" ] && exit 0
+            sleep 10
+          done
+          echo "PyPI still serving $got, expected $want" >&2
+          exit 1
+
+      # The registry entry names a version, so it is republished every release or it keeps pointing at the old
+      # one. github-oidc uses the id-token permission this job already holds for PyPI, so there is no login to
+      # perform by hand and no token stored anywhere -- the namespace io.github.amyodov comes from the repository
+      # owner. The publisher version is pinned so a release cannot change behaviour underneath us.
+      - name: Publish to the MCP registry
+        run: |
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" |
+            tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

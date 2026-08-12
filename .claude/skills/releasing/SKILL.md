@@ -1,12 +1,13 @@
 ---
-name: releasing-to-pypi
-description: Release YAAC to PyPI - preconditions, version bump, git tag, GitHub release, publish workflow, post-release verification. Invoked by the user only; a release never happens on the assistant's own initiative.
+name: releasing
+description: Cut a YAAC release - preconditions, version bump, regenerated manifests, git tag, GitHub release, and the indexes that follow it: PyPI, the MCP registry, Context7. Invoked by the user only; a release never happens on the assistant's own initiative.
 argument-hint: [version]
 disable-model-invocation: true
 ---
 
-# Release YAAC
+# Release a version of YAAC
 
+One release reaches PyPI, the git tag and GitHub release, the official MCP registry, and Context7.
 Releases only happen when the user asks for one — `disable-model-invocation` enforces that, and nothing in this
 file overrides it. The version being released is `$1` (e.g. `0.1.1`): a bare semver, no leading `v` — the tag adds it.
 
@@ -30,7 +31,7 @@ Set `version = "$1"` in `pyproject.toml`, run `uv sync` so `uv.lock` follows, th
 manifests, which carry the version too:
 
 ```bash
-uv run python ${CLAUDE_SKILL_DIR}/generate_plugin.py
+uv run python ${CLAUDE_SKILL_DIR}/scripts/generate_manifests.py
 ```
 
 Commit all of it together. The version in
@@ -39,8 +40,19 @@ its tag is a support puzzle nobody needs.
 
 ## 3. Tag and release
 
+Push the bump first, then **wait for its own CI run to go green before tagging**. The green checked in step 1 was
+for the commit before the bump; pushing starts a fresh run, and the commit being released is the one nobody has
+verified yet. A red Windows job has hidden here before.
+
 ```bash
 git push origin main
+until [ "$(gh run list --branch main --limit 1 --json status --jq '.[0].status')" = completed ]; do sleep 20; done
+gh run list --branch main --limit 1 --json headSha,conclusion --jq '.[0] | "\(.headSha[0:7]) \(.conclusion)"'
+```
+
+That has to print the bump commit and `success`. If it does not, stop: the tag is the point of no return.
+
+```bash
 git tag v$1 && git push origin v$1
 gh release create v$1 --title "v$1 — <short summary>" --notes "<what changed and why it matters>"
 ```
@@ -61,29 +73,32 @@ Both of these describe a version, and both keep describing the previous one unti
 after step 4 confirms PyPI is serving `$1` — each reads the published package, so running them early records the
 release that is still live.
 
-**The MCP registry.** `server.json` was regenerated in step 2 and already names `$1`; the registry entry has to be
-republished for every release or it keeps pointing at the old version.
+**The MCP registry publishes itself.** `publish.yml` waits for PyPI to serve `$1`, authenticates with
+`github-oidc` using the id-token permission it already holds, and republishes `server.json` — which step 2
+regenerated with the new version. Nothing to run and nothing to log in to; just confirm it landed:
 
 ```bash
-mcp-publisher publish
+curl -sS "https://registry.modelcontextprotocol.io/v0/servers?search=agentic-chat&limit=3"
 ```
 
-`mcp-publisher login github` first if the session has expired; the tool is a Homebrew install, not a project
-dependency, so skip this step and say so if it is absent rather than installing anything. A 400 naming
-`ownership validation failed` means the published README lacks the `mcp-name:` marker — the marker has to be
-inside the *released* artifact, not merely in git, so the fix is a later release rather than a retry.
+The entry should report `$1`, `status: active`, `isLatest: true`. If the workflow step failed instead, a 400
+naming `ownership validation failed` means the published README lacks the `mcp-name:` marker — the marker has to
+be inside the *released* artifact, not merely in git, so the fix is a later release rather than a retry.
 
 **Context7**, which otherwise re-crawls a project of this size only every 45 days, so its answers would describe
 the previous release for weeks:
 
 ```bash
-curl -fsS -X POST https://context7.com/api/v1/refresh \
-  -H "Authorization: Bearer $CONTEXT7_API_KEY" \
-  -d 'libraryId=/amyodov/yet-another-agentic-chat'
+curl -sS -X POST https://context7.com/api/v1/refresh \
+  -H "Authorization: Bearer $CONTEXT7_API_KEY" -H "Content-Type: application/json" \
+  -d '{"libraryName": "/amyodov/yet-another-agentic-chat"}'
 ```
 
-Skip it if `CONTEXT7_API_KEY` is unset — the key comes from context7.com/dashboard and is not required to
-release.
+The field is `libraryName` and the body must be JSON; a form-encoded post or a `libraryId` key returns a bare 500
+that says nothing. Refreshes are rate-limited to one per 10 days, so
+`{"error":"too-early", ...}` is a normal answer meaning the index is already recent enough — report it and move
+on rather than retrying. Skip the step entirely if `CONTEXT7_API_KEY` is unset; the key comes from
+context7.com/dashboard and is not required to release.
 
 Both are written up for a human in `docs/development.md` under Publishing.
 

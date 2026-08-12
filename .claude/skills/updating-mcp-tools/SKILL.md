@@ -1,7 +1,7 @@
 ---
 name: updating-mcp-tools
 description: The workflow for writing or changing YAAC's MCP tool definitions in src/yaac/frontend.py. Use whenever a tool is added, removed or renamed, a docstring, parameter or Field description is edited, or the server instructions change — even for a small wording tweak: first get the descriptions right, then regenerate docs/tools.md so the documented toolset matches what a client sees. Also use when docs/tools.md is suspected stale or its accuracy is questioned.
-allowed-tools: Bash(uv run python ${CLAUDE_SKILL_DIR}/generate.py)
+allowed-tools: Bash(uv run python ${CLAUDE_SKILL_DIR}/scripts/generate.py)
 ---
 
 # Updating the MCP tool surface
@@ -34,7 +34,7 @@ instructions. Editing it by hand would only create a version of the truth that t
 1. From the repository root, run:
 
    ```bash
-   uv run python ${CLAUDE_SKILL_DIR}/generate.py
+   uv run python ${CLAUDE_SKILL_DIR}/scripts/generate.py
    ```
 
 2. `git diff docs/tools.md` and read the diff. It should contain precisely the change made in step 1 — an

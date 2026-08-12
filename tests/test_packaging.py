@@ -1,8 +1,8 @@
 """The plugin manifests, which are generated and therefore able to go stale.
 
-YAAC ships as two plugin standards at once -- Agent Plugins 1.0.0 and Claude Code's own layout -- so the same
-facts are written into five files. These check that the files on disk are what the generator would write today,
-and that the two standards agree with each other about what they are installing.
+YAAC restates the same facts for three kinds of reader -- Agent Plugins 1.0.0 clients, Claude Code, and the
+official MCP registry -- in manifests a generator writes. These check that what is on disk is what the generator
+would write today, and that the two plugin standards agree about what they are installing.
 """
 
 import importlib.util
@@ -13,12 +13,12 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-GENERATOR = REPO / ".claude" / "skills" / "releasing-to-pypi" / "generate_plugin.py"
+GENERATOR = REPO / ".claude" / "skills" / "releasing" / "scripts" / "generate_manifests.py"
 
 
 def generator():
     """Load the generator as a module, so the expectation comes from it rather than a second copy of the truth."""
-    spec = importlib.util.spec_from_file_location("generate_plugin", GENERATOR)
+    spec = importlib.util.spec_from_file_location("generate_manifests", GENERATOR)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -31,9 +31,10 @@ def generated():
     return gen, {path: gen.render(content) for path, content in gen.files().items()}
 
 
-def test_the_generator_writes_every_file_the_two_standards_need(generated) -> None:
+def test_the_generator_writes_every_manifest_the_project_publishes(generated) -> None:
     """Agent Plugins wants plugin.json and mcp.json; Claude Code wants the same facts under .claude-plugin/ and
-    .mcp.json; the marketplace at the repository root is what `/plugin marketplace add owner/repo` reads."""
+    .mcp.json; the marketplace at the repository root is what `/plugin marketplace add owner/repo` reads; and
+    server.json is the MCP registry submission. Naming the set here is what makes a forgotten one visible."""
     _, rendered = generated
     assert set(rendered) == {
         "plugin/plugin.json",
@@ -57,8 +58,9 @@ def test_the_generator_writes_every_file_the_two_standards_need(generated) -> No
     ],
 )
 def test_the_manifests_on_disk_are_current(generated, path: str) -> None:
-    """A version lives in pyproject.toml and in three manifests. Nobody keeps four copies in step by hand, so a
-    forgotten regeneration fails here rather than shipping a plugin that claims the wrong version."""
+    """pyproject.toml is the only place a version is written; every manifest restates it. Nobody keeps that many
+    copies in step by hand, so a forgotten regeneration fails here rather than shipping a plugin that claims the
+    wrong version."""
     _, rendered = generated
     assert (REPO / path).read_text(encoding="utf-8") == rendered[path]
 
@@ -79,7 +81,7 @@ def test_both_standards_install_the_same_server(generated) -> None:
 
 def test_the_version_matches_the_package(generated) -> None:
     """The plugin installs the published package, so claiming a version the package does not have is a lie the
-    user can see in two places at once."""
+    user can check against PyPI."""
     gen, rendered = generated
     version = gen.project()["version"]
     for path in ("plugin/plugin.json", "plugin/.claude-plugin/plugin.json"):

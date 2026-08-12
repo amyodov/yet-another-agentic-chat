@@ -46,7 +46,7 @@ Each session logs to stderr, which your client will show as MCP server output:
 
 ## Publishing
 
-The release itself is a checklist, kept as the `releasing-to-pypi` skill in
+The release itself is a checklist, kept as the `releasing` skill in
 `.claude/skills/` so it runs the same way every time: preconditions, version
 bump, plugin manifests regenerated, tag, GitHub release, and the trusted
 publisher takes it from there. This section covers the surrounding chores that
@@ -61,13 +61,13 @@ Two things in the tree are written by scripts and will fail the suite if edited
 by hand or left stale:
 
 ```bash
-uv run python .claude/skills/updating-mcp-tools/generate.py      # docs/tools.md
-uv run python .claude/skills/releasing-to-pypi/generate_plugin.py # the plugin manifests
+uv run python .claude/skills/updating-mcp-tools/scripts/generate.py      # docs/tools.md
+uv run python .claude/skills/releasing/scripts/generate_manifests.py # the plugin manifests
 ```
 
 The first reads the live tool registry, so the documented tools cannot drift
-from what a client is served. The second writes the plugin manifests from
-`pyproject.toml` — the version otherwise lives in four files.
+from what a client is served. The second writes the plugin and registry manifests from
+`pyproject.toml`, each of which restates the version.
 
 ### Nudging Context7
 
@@ -75,12 +75,15 @@ Context7 re-crawls a project of this size roughly every 45 days, so without a
 push its answers describe the previous release for weeks:
 
 ```bash
-curl -fsS -X POST https://context7.com/api/v1/refresh \
-  -H "Authorization: Bearer $CONTEXT7_API_KEY" \
-  -d 'libraryId=/amyodov/yet-another-agentic-chat'
+curl -sS -X POST https://context7.com/api/v1/refresh \
+  -H "Authorization: Bearer $CONTEXT7_API_KEY" -H "Content-Type: application/json" \
+  -d '{"libraryName": "/amyodov/yet-another-agentic-chat"}'
 ```
 
-The key comes from [context7.com/dashboard](https://context7.com/dashboard).
+The key comes from [context7.com/dashboard](https://context7.com/dashboard). The field is `libraryName`, and the
+body has to be JSON — a form post, or the `libraryId` name the API guide implies, returns a bare 500. Refreshes
+are capped at one per 10 days, so `{"error":"too-early"}` means the index is already recent enough rather than
+that anything went wrong.
 Worth remembering that the `rules` in `context7.json` are printed verbatim ahead
 of every answer Context7 gives about YAAC — a stale one is wrong in public and
 invisible from here.
@@ -106,9 +109,9 @@ mcp-publisher validate
 mcp-publisher publish
 ```
 
-Republish on every release: the entry names a version, and without it the
-registry keeps pointing at the previous one. The release skill does this as part
-of a run.
+Only needed by hand for a first listing or a fix: `publish.yml` republishes on
+every release, authenticating with `github-oidc` rather than a stored token, so
+the entry follows the version without anyone logging in.
 
 Without Homebrew, the releases carry per-platform tarballs; fetch one to a
 temporary directory and run it from there rather than adding anything to the
