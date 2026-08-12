@@ -49,9 +49,9 @@ moment, you tell a session "connect to yaac" — and it deals with the rest.
 - **Long jobs.** One session babysits a slow test suite and messages the coding
   session when it goes green, instead of you ferrying the news by hand.*
 
-\* Received when the listening session next checks its inbox — see *Messages do
-not arrive on their own* below. Delivery at the next tool call, without being
-asked, requires hook support and is planned for v1.
+\* On Claude Code, installed as a plugin, these arrive on their own — see
+*Instead: as a plugin*. Everywhere else the listening session receives them next
+time it checks its inbox; see *Messages do not arrive on their own* below.
 
 ## Installing
 
@@ -121,6 +121,13 @@ marketplace:
 /plugin marketplace add amyodov/yet-another-agentic-chat
 /plugin install yaac@yaac
 ```
+
+There it brings the one thing the MCP server alone cannot: messages arrive
+**without being asked for**. A hook hands the session whatever came in — as it
+works, when you type, and as a turn ends, which is the one that reopens a
+finished turn so it can act on the news. It is a delivery, not a nudge: the
+message text itself, already read, with `check_inbox` left for when you want to
+look on purpose. Nothing to configure, and silent when nothing has arrived.
 
 **[Agent Plugins](https://agent-plugins.org/) 1.0.0** — ChatGPT, Codex, Cursor,
 GitHub Copilot, Kiro, VS Code. Point your client at this repository; the plugin
@@ -324,26 +331,28 @@ the choices, and `dev_connections()` lists them on demand.
 - Automatic takeover when the relaying session disappears, in a few seconds, with
   no user action and no configuration
 - `list_channels` from a session that has not joined anything, with no side effects
+- Installable as a plugin as well as a plain MCP server, in both plugin standards
+- On Claude Code, messages delivered into the session as they arrive, without
+  anyone remembering to ask
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on
   all three
 
 ### Planned
 
-YAAC deliberately works on every MCP client, including ones with no extension
-mechanism at all. What follows adds automatic delivery where a client supports
-it. Each layer is additive — pure MCP keeps working underneath all of them, so
-nothing here changes the core.
+Everything below is additive. Pure MCP keeps working underneath all of it, so a
+client with no extension mechanism at all loses nothing it has today, and none of
+this changes the core.
 
-These are phases of the work, not releases; the numbers say nothing about which
-version any of them lands in.
+What is left is the one kind of delivery a hook cannot manage: reaching a session
+that is doing *nothing*. A hook only fires when the session acts, so a message
+that arrives while it sits idle waits for the next thing to happen. A [Claude
+Code channel](https://code.claude.com/docs/en/channels) would push into it
+outright — and while that is a research preview it wants Anthropic
+authentication, an organisation setting on Team and Enterprise plans, and a
+`--dangerously-load-development-channels` launch until third-party channels are
+allowlisted.
 
-- **Phase 1** — delivery that does not wait to be asked for. A `PreToolUse` hook
-  for Claude Code would surface messages at the next tool call; a [Claude Code
-  channel](https://code.claude.com/docs/en/channels) would reach an idle session
-  outright; other clients will offer other openings. Whichever of these fit, and
-  any better idea that turns up.
-- **Phase 2** — a plugin bundling the server with a skill
-- **Phase 3** — client-specific push where the client offers it
+Other clients stay pull-based until each offers an opening of its own.
 
 Not planned, and deliberately so: delivery guarantees, message history, threads,
 reactions, and multi-host operation.

@@ -162,6 +162,38 @@ async def test_the_dormant_tool_surface_is_what_this_client_can_act_on(
     assert [t["name"] for t in tools if not t["description"].strip()] == []
 
 
+@pytest.mark.parametrize("client_name", ["test", "codex-mcp-client"], ids=["relists", "does-not"])
+async def test_the_hooks_tool_is_callable_but_never_offered(endpoint: str, client_name: str) -> None:
+    """`hook_report` exists for Claude Code's `mcp_tool` hooks, which name the tool they call and do not need it
+    listed. Listing it would put a second, differently-behaved `check_inbox` in front of the model on every
+    session; unregistering it would make the hook fail on every tool call, in a session that has joined nothing as
+    much as in one that has. So it is registered and withheld, in both states and for either kind of client."""
+    join = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}},
+    }
+    call = {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {"name": "hook_report", "arguments": {"event": "Stop"}},
+    }
+    listing = {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
+    stdout, _ = await run_server(endpoint, handshake(client_name) + [join, listing, call])
+    messages = decode(stdout)
+
+    for reply in (2, 4):  # dormant, then on air
+        [tools] = [m["result"]["tools"] for m in messages if m.get("id") == reply]
+        assert "hook_report" not in {t["name"] for t in tools}
+    [answer] = [m["result"] for m in messages if m.get("id") == 5]
+    # Nothing had been sent, so it declines to speak -- and says so in the hook's own vocabulary rather than by
+    # failing, because a hook that errors reports an error on every tool call for the rest of the session.
+    assert answer.get("isError") is not True
+    assert json.loads(answer["content"][0]["text"]) == {"suppressOutput": True}
+
+
 @pytest.mark.parametrize(
     "tool,expected",
     [

@@ -76,7 +76,9 @@ def main() -> None:
         f"> {mcp.instructions}",
         "",
     ]
-    tools = mcp._tool_manager.list_tools()
+    # The hook's tool is registered but withheld from every tools/list, so a client never sees it and neither does
+    # this reference, which documents what a client is served.
+    tools = [tool for tool in mcp._tool_manager.list_tools() if tool.name != frontend.HOOK_TOOL]
     # Always-listed tools first, then the on-air set; alphabetical within each group so the output is stable.
     for tool in sorted(tools, key=lambda t: (t.name in on_air_names, t.name)):
         availability = "listed only while on air" if tool.name in on_air_names else "always listed"

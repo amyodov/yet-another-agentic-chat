@@ -1,0 +1,48 @@
+{
+  "description": "Hands this session the messages other sessions have sent it. Silent when there are none.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:yaac:yaac",
+            "tool": "hook_report",
+            "input": {
+              "event": "PreToolUse",
+              "tool_name": "${tool_name}"
+            }
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:yaac:yaac",
+            "tool": "hook_report",
+            "input": {
+              "event": "UserPromptSubmit"
+            }
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:yaac:yaac",
+            "tool": "hook_report",
+            "input": {
+              "event": "Stop"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

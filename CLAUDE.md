@@ -29,10 +29,12 @@ never the Claude Code feature of the same name.
 
 ```
 src/yaac/
-  frontend.py   MCP tool definitions
+  frontend.py   MCP tool definitions, and the tool a Claude Code hook calls
   backend.py    sockets, bind election, receive loops, connection state
   hat.py        routing table, whois, roster, bounce
   protocol.py   envelope + control messages, serialization
+  chat.py       the terminal client's entry point; imports textual only once it knows it is there
+  chat_app.py   the terminal client itself
 ```
 
 Python 3.14+, `uv`, `ruff`. Dependencies are `pyzmq` and `mcp` — ask before adding another.
@@ -90,6 +92,32 @@ ways on one channel, each running its own server process.
 `resources/updated`, `list_changed`, `sampling/createMessage`, `elicitation/create`) reaches the model's context.
 Delivery is pull-only, so the tool descriptions have to carry the reminder to call `check_inbox`.
 
+**A Claude Code hook can call a tool on the MCP server it is bundled with, in the same process.** `type:
+"mcp_tool"` names a `server` and a `tool`; for a plugin-bundled server the name is the scoped
+`plugin:<plugin>:<server>`, not the bare key under `mcpServers`. The tool's *text* content is then read exactly as
+a command hook's stdout: valid JSON is taken as a decision object, anything else as plain output. So `hook_report`
+returns a JSON string rather than a result dict — a tool result shaped like a tool result parses fine, matches no
+decision field, and is silently discarded.
+
+That is why nothing about delivery touches the wire. The hook runs inside the process that owns the inbox, so
+there is no second process to find, no socket to open, no session identifier to pass around, and the hat is not
+involved at all. An earlier attempt had every backend push an unread tally to the hat so an out-of-process hook
+could ask it — the hat kept a ledger of everyone's mailbox, which is not its job and cannot be kept true.
+
+**Where a hook's `additionalContext` lands depends on the event**: next to the tool result for `PreToolUse` and
+`PostToolUse`, alongside the prompt for `UserPromptSubmit`, and at the end of the turn for `Stop` — where, the
+documentation says, "the conversation continues so Claude can act on the feedback". `Stop` is therefore the one
+that can reopen a finished turn. Text placed there is in the model's context, which makes it a delivery and not a
+notification: `hook_report` takes the messages, exactly as `check_inbox` does, and a second `Stop` then finds an
+empty inbox, which is what makes a loop impossible without any `stop_hook_active` bookkeeping.
+
+**A peer older than a control message answers nothing, and only ordering reveals it.** A 0.3.0 hat logs
+`ignoring control message 'unread?'` and never replies, so a lone query waits out its whole timeout. Nothing
+depends on this today, but it is the trap waiting for the envelope work in `docs/zmq.md`: pair a new query with
+one every version has answered — `channels?` — and rely on a ROUTER handling one peer's messages in order, so a
+`channels` reply arriving with no answer before it proves the peer read the new query and had nothing to say.
+Measured against a real 0.3.0 hat, that turned a 1.0 s timeout into 0.13 s.
+
 **Binding a busy port fails in ~0.4 ms** with `EADDRINUSE`. That is why every backend can just try.
 
 **Windows needs the selector event loop** (found in pyzmq `zmq/asyncio.py`; measured since — the CI Windows job runs
@@ -132,7 +160,7 @@ replacing JSON with a binary framing would.
 
 Received frames go through `protocol.parse`, never `loads` — it rejects a `yaac` field that is not exactly this
 build's version, checking the parsed value rather than the leading bytes, since that is what the format guarantees.
-`type(version) is not int` because `1.0` and `True` both equal `1`. Do not call `json.dumps` anywhere else.
+`type(version) is not int` because `1.0` and `True` both equal `1`. Do not call `json.dumps` on anything that goes on the wire. `frontend.hook_report` is the one other caller, and it is answering Claude Code's hook contract rather than writing a YAAC message -- `protocol.dumps` would stamp `yaac: 1` into somebody else's format.
 
 `from` and `to` are `Address` objects, not strings: `{name, zmq_routing_id}`, either nullable. A name is unique on a
 channel only while its holder is connected; a routing id identifies one connection and is never reused. Further
@@ -145,8 +173,9 @@ rather than reading dict keys — it rejects a malformed address instead of coer
 
 Each has a test.
 
-1. **Nothing is written to stdout.** It carries the stdio transport; one `print()` breaks the session with a parse
-   error. Log to stderr via `backend.log`.
+1. **The MCP server writes nothing to stdout.** It carries the stdio transport; one `print()` breaks the session
+   with a parse error. Log to stderr via `backend.log`. The terminal client is the exception and owns its own
+   stdout, which is why it is a separate entry point rather than a flag.
 2. **Nothing is ever written to disk, and a dormant server opens no socket.** Unread messages, rosters and
    membership all live in memory and die with the process, so there is nothing to clean up after a crash.
    `Backend` is not constructed at all until `join_channel`.

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from yaac import frontend
+
 REPO = Path(__file__).resolve().parent.parent
 GENERATOR = REPO / ".claude" / "skills" / "releasing" / "scripts" / "generate_manifests.py"
 
@@ -33,14 +35,16 @@ def generated():
 
 def test_the_generator_writes_every_manifest_the_project_publishes(generated) -> None:
     """Agent Plugins wants plugin.json and mcp.json; Claude Code wants the same facts under .claude-plugin/ and
-    .mcp.json; the marketplace at the repository root is what `/plugin marketplace add owner/repo` reads; and
-    server.json is the MCP registry submission. Naming the set here is what makes a forgotten one visible."""
+    .mcp.json, plus hooks/hooks.json, which Agent Plugins has no equivalent of; the marketplace at the repository
+    root is what `/plugin marketplace add owner/repo` reads; and server.json is the MCP registry submission.
+    Naming the set here is what makes a forgotten one visible."""
     _, rendered = generated
     assert set(rendered) == {
         "plugin/plugin.json",
         "plugin/mcp.json",
         "plugin/.claude-plugin/plugin.json",
         "plugin/.mcp.json",
+        "plugin/hooks/hooks.json",
         ".claude-plugin/marketplace.json",
         "server.json",
     }
@@ -53,6 +57,7 @@ def test_the_generator_writes_every_manifest_the_project_publishes(generated) ->
         "plugin/mcp.json",
         "plugin/.claude-plugin/plugin.json",
         "plugin/.mcp.json",
+        "plugin/hooks/hooks.json",
         ".claude-plugin/marketplace.json",
         "server.json",
     ],
@@ -90,6 +95,31 @@ def test_the_version_matches_the_package(generated) -> None:
     server = json.loads(rendered["server.json"])
     assert server["version"] == version
     assert server["packages"][0]["version"] == version
+
+
+def test_the_hooks_call_a_tool_this_server_really_has(generated) -> None:
+    """The hook names its tool by string, on a server named by string, and neither is checked until it fires -- at
+    which point a wrong name is a failed hook on every tool call. Both are pinned here instead.
+
+    The server name is the plugin-scoped form Claude Code requires for a plugin-bundled server, which is not the
+    bare key under `mcpServers`; getting that wrong is the easy mistake, and it fails the same silent way."""
+    _, rendered = generated
+    hooks = json.loads(rendered["plugin/hooks/hooks.json"])["hooks"]
+    server = json.loads(rendered["plugin/.mcp.json"])["mcpServers"]
+    entries = [entry for event in hooks.values() for group in event for entry in group["hooks"]]
+
+    assert {entry["type"] for entry in entries} == {"mcp_tool"}
+    assert {entry["server"] for entry in entries} == {"plugin:yaac:yaac"}
+    assert {entry["tool"] for entry in entries} == {frontend.HOOK_TOOL}
+    assert "yaac" in server  # the bare key the scoped name is built from
+    assert frontend.HOOK_TOOL in {tool.__name__ for tool in (frontend.hook_report,)}
+    # Every event it fires on, and the input each is given. PreToolUse alone can say what is about to run, which
+    # is how delivery stands aside for check_inbox itself.
+    assert {event: [entry["input"] for entry in group[0]["hooks"]] for event, group in hooks.items()} == {
+        "PreToolUse": [{"event": "PreToolUse", "tool_name": "${tool_name}"}],
+        "UserPromptSubmit": [{"event": "UserPromptSubmit"}],
+        "Stop": [{"event": "Stop"}],
+    }
 
 
 def test_the_bundled_skill_is_discoverable(generated) -> None:

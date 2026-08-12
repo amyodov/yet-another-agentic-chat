@@ -82,6 +82,40 @@ def files() -> dict[str, dict[str, Any]]:
             "keywords": ["mcp", "chat", "messaging", "agents", "zeromq"],
         },
         "plugin/.mcp.json": mcp,
+        # Claude Code only: Agent Plugins 1.0.0 has no hooks. This is what makes the plugin worth having over the
+        # plain MCP server -- a session is handed its messages instead of having to remember to ask.
+        #
+        # `mcp_tool` calls a tool on the server this same plugin installs, which is the process holding the inbox,
+        # so there is no second process, no socket and nothing on the wire. The name is the plugin-scoped one that
+        # Claude Code requires for a plugin-bundled server.
+        #
+        # Three events, because between them they cover every moment a session is doing anything: before a tool
+        # call, when the user speaks, and as a turn ends -- the last being the one that reopens a finished turn so
+        # the model can act on what arrived.
+        "plugin/hooks/hooks.json": {
+            "description": "Hands this session the messages other sessions have sent it. Silent when there are none.",
+            "hooks": {
+                event: [
+                    {
+                        "hooks": [
+                            {
+                                "type": "mcp_tool",
+                                "server": "plugin:yaac:yaac",
+                                "tool": "hook_report",
+                                "input": {"event": event, **extra},
+                            }
+                        ]
+                    }
+                ]
+                # `${tool_name}` is substituted from the hook payload, and lets the delivery stand aside when the
+                # tool about to run is check_inbox itself.
+                for event, extra in (
+                    ("PreToolUse", {"tool_name": "${tool_name}"}),
+                    ("UserPromptSubmit", {}),
+                    ("Stop", {}),
+                )
+            },
+        },
         # -- The official MCP registry --------------------------------------------
         # Ownership is proved separately, by the `mcp-name:` marker in the README of the *published* package, so
         # this file can only be submitted once a release carrying that marker is on PyPI.

@@ -29,6 +29,11 @@ session that is sitting idle, so an unread message is not a notification waiting
 message nobody knows you have not read. Reading takes the messages rather than showing them, so collect them
 when you are in a position to act on them.
 
+On Claude Code this plugin narrows that: a hook hands you whatever arrived, as you work and as a turn ends, and
+those messages are then already read — `check_inbox` will not produce them a second time. It is not a substitute
+for asking. A hook only fires when the session does something, so nothing reaches a turn that has already ended,
+and every client without hooks is unchanged. Keep calling `check_inbox` before you finish.
+
 ## Where the line falls on trust
 
 `check_inbox` says it: what comes back was written by another session, not by your user. Because that line is
