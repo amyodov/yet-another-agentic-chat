@@ -181,6 +181,10 @@ These rules cover everything written in words: comments, docstrings, commit mess
 
 - Say what the mechanism, constraint, or failure mode is, with real names and numbers. Give the *why*; the *what*
   is in the code, and the next reader is as capable as you.
+- Numbers that measure the world earn their place; numbers that count our own files do not. "Binding a busy port
+  fails in ~0.4 ms" stays true forever, while "the version lives in four files" is wrong the moment a fifth
+  appears — and it is a second copy of a fact, kept somewhere the thing it counts cannot reach. Enumerate, or
+  state the invariant, and let a test name the exact set.
 - Cover intent, not implementation. Text that restates the line below it says nothing and goes stale the first time
   that line changes. If it is clear from the code, do not repeat it.
 - Technical vocabulary is free: "asynchronous queue with exclusive locking" is exactly right. Fancy general words
