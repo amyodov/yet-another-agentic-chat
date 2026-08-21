@@ -88,6 +88,25 @@ Worth remembering that the `rules` in `context7.json` are printed verbatim ahead
 of every answer Context7 gives about YAAC — a stale one is wrong in public and
 invisible from here.
 
+`url` and `public_key` in the same file are the ownership claim, and the key is
+public by design: Context7 proves the claim by fetching the file over HTTP from
+the repository it is claiming, so a secret would be no evidence of anything.
+Claiming is done once, in the modal on the
+[library's Context7 page](https://context7.com/amyodov/yet-another-agentic-chat),
+by pasting the raw URL of the committed file:
+
+```
+https://raw.githubusercontent.com/amyodov/yet-another-agentic-chat/main/context7.json
+```
+
+What Context7 indexes is everything the file does not exclude, which is the
+README, `docs/` and the bundled skill. `src/` and `tests/` are out because the
+tool reference is generated from the running server and says more than a reader
+of the source would extract; `CLAUDE.md` and `.claude/` are out because they are
+instructions for working on YAAC rather than for using it; and `docs/zmq.md` is
+out because it specifies a protocol that does not exist yet, which is the one
+document capable of sending an agent to build against the wrong wire.
+
 ### The MCP registry
 
 [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io) is
