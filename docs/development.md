@@ -102,10 +102,16 @@ https://raw.githubusercontent.com/amyodov/yet-another-agentic-chat/main/context7
 What Context7 indexes is everything the file does not exclude, which is the
 README, `docs/` and the bundled skill. `src/` and `tests/` are out because the
 tool reference is generated from the running server and says more than a reader
-of the source would extract; `CLAUDE.md` and `.claude/` are out because they are
-instructions for working on YAAC rather than for using it; and `docs/zmq.md` is
-out because it specifies a protocol that does not exist yet, which is the one
-document capable of sending an agent to build against the wrong wire.
+of the source would extract; `CLAUDE.md` is out because it is instructions for
+working on YAAC rather than for using it; and `docs/zmq.md` is out because it
+specifies a protocol that does not exist yet, which is the one document capable
+of sending an agent to build against the wrong wire.
+
+`.claude/` and `.github/` are listed for the same reason as `CLAUDE.md`, but they
+are a precaution rather than a fix: asking the index a question only the releasing
+skill answers returns nothing, and a question about the CI matrix is answered out
+of the README, so nothing under a dot-directory was reaching it anyway. The
+entries cost two strings and say what belongs in the index if that ever changes.
 
 ### The MCP registry
 
