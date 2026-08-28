@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,9 +22,9 @@ SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
 async def run_server(endpoint: str, requests: list[dict], env: dict[str, str] | None = None) -> tuple[bytes, bytes]:
     """Drive the MCP server over stdio and return its raw stdout and stderr.
 
-    stdin is deliberately held open until the last reply has been read: the
-    server shuts down on EOF, and closing early races it into exiting before it
-    has answered.
+    stdin is deliberately held open until the last reply has been read: EOF ends
+    the stdio loop, and closing early races it into shutting down before it has
+    answered. What EOF does after that is its own test, below.
     """
     process = await asyncio.create_subprocess_exec(
         *SERVER,
@@ -296,6 +297,49 @@ async def test_check_inbox_will_not_read_an_inbox_it_was_not_given(
     # that lost its id can recover rather than guess.
     if arguments:
         assert "open_connections" in body
+
+
+async def test_a_server_whose_client_left_lets_go_of_the_port(endpoint: str) -> None:
+    """A client going away is the ordinary end of every session, and the process has to actually end.
+
+    It did not. `Backend.close` terminated the ZMQ context without closing the sockets in it, and termination
+    waits for exactly that, so the process survived its client -- measured once at three days and eighteen hours,
+    still holding the rendezvous port with its event loop long gone. Every session on the machine then found a
+    port that accepts connections and answers nothing, which reads as an empty network rather than a broken one.
+
+    The port is the assertion, not the exit code: a hat that cannot be replaced is the part that hurts other
+    sessions.
+    """
+    port = int(endpoint.rsplit(":", 1)[1])
+    process = await asyncio.create_subprocess_exec(
+        *SERVER, "--endpoint", endpoint, cwd=REPO,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+    )
+    assert process.stdin and process.stdout
+
+    for request in [*handshake(), {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                                   "params": {"name": "join_channel",
+                                              "arguments": {"channel": "forum", "name": "ann"}}}]:
+        process.stdin.write((json.dumps(request) + "\n").encode())
+        await process.stdin.drain()
+        if "id" in request:
+            while line := await process.stdout.readline():
+                if json.loads(line).get("id") == request["id"]:
+                    break
+
+    process.stdin.close()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=20)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise AssertionError("the server outlived its client and kept the rendezvous port") from None
+
+    with socket.socket() as probe:
+        # SO_REUSEADDR because libzmq sets it, so this asks the question a successor would ask: connections the
+        # departed hat had open leave sockets in TIME_WAIT, and those must not stand in the way.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind(("127.0.0.1", port))  # raises if the endpoint is still held
 
 
 def test_no_python_file_reads_or_writes_text_without_naming_the_encoding() -> None:

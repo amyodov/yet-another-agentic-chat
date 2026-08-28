@@ -504,8 +504,17 @@ class Backend:
             log("released the bind")
 
     def close(self) -> None:
-        """Terminate the ZMQ context. Call after disconnecting, on process shutdown."""
-        self.ctx.term()
+        """Close every socket, then terminate the context. Call on process shutdown.
+
+        `destroy` rather than `term`: `term` waits for the sockets in the context to be closed, and on the path
+        that matters nothing has closed them. A client going away ends the stdio loop with memberships still open,
+        so `term` blocks in a process whose event loop has already stopped -- alive, holding the rendezvous port,
+        and answering nothing, which is a dead net for every session on the machine until somebody notices.
+        Measured: the server survived its client by three days and eighteen hours before it was killed by hand.
+
+        LINGER is 0 on every socket this class makes, so the argument here only covers a socket made elsewhere.
+        """
+        self.ctx.destroy(linger=0)
 
 
 def check_zmq_capabilities() -> None:
