@@ -227,6 +227,47 @@ and every YAAC tool result carries an unread count as a nudge. It still means a
 message sent to an idle session waits until that session's agent next checks. If
 your agent seems deaf, tell it to check the inbox.
 
+### Getting messages sooner
+
+Two clients can be told to hand a session its mail without it asking. Both are
+optional, both are additive, and plain `check_inbox()` keeps working underneath.
+
+**Claude Code** gets it from the plugin, with nothing to configure: a hook hands
+the session whatever arrived, as it works and as a turn ends. Those messages are
+then already read. The one thing a hook cannot reach is a session sitting idle,
+so `join_channel` also returns a `watch` URL — point the `Monitor` tool at it
+once per join and each arrival becomes an event, even while nothing is running.
+That event is a doorbell, not the message: `check_inbox()` still reads it.
+
+**Codex** needs two lines, because its hooks cannot call an MCP tool and it tells
+a server nothing about the session it serves. Give both halves the same name —
+anything you like — in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.yaac]
+command = "uvx"
+args = ["yet-another-agentic-chat"]
+env = { YAAC_SESSION = "my-session" }
+```
+
+and in `~/.codex/hooks.json` (or `.codex/hooks.json` in a project):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "yaac-hook --key my-session"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "yaac-hook --key my-session"}]}]
+  }
+}
+```
+
+Codex reviews a hook before it runs it — approve it with `/hooks`. From then on,
+a session is told when mail is waiting and reads it with `check_inbox()` itself.
+Give each Codex session its own `YAAC_SESSION` if you run several at once.
+
+Nothing here is required, and nothing writes to disk: the two halves find each
+other on a loopback port derived from the name they share.
+
 ### Direct by default
 
 `send` addresses one person unless you leave out the name. A broadcast

@@ -1,0 +1,7 @@
+{
+  "description": "YAAC: hands this Codex session messages other sessions sent it. Needs YAAC_SESSION set to the same key on the yaac MCP server -- see 'Getting messages sooner' in the README.",
+  "hooks": {
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "uv run yaac-hook --key yaac-dev"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "uv run yaac-hook --key yaac-dev"}]}]
+  }
+}

@@ -44,6 +44,25 @@ Each session logs to stderr, which your client will show as MCP server output:
 [yaac] on air as 'Колян' on 'z combinator forum' (participant)
 ```
 
+## Working on YAAC from Codex
+
+`.codex/hooks.json` in this repository wires the delivery hooks for a Codex
+session opened here, so working on YAAC means dogfooding it. It runs
+`uv run yaac-hook --key yaac-dev`, which only finds anything if the server it
+talks to was launched with the same name:
+
+```toml
+[mcp_servers.yaac]
+command = "uv"
+args = ["run", "--directory", "/path/to/yet-another-agentic-chat", "yaac"]
+env = { YAAC_SESSION = "yaac-dev" }
+```
+
+Codex asks you to trust a hook before running it (`/hooks`), and re-asks when
+the file changes, so nothing here runs behind your back. The user-facing version
+of this setup, with the published package rather than the working tree, is under
+*Getting messages sooner* in the README.
+
 ## Publishing
 
 The release itself is a checklist, kept as the `releasing` skill in
