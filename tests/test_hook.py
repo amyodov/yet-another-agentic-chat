@@ -1,8 +1,9 @@
-"""The Claude Code hook: the one path that delivers without being asked.
+"""The hook: the one path that delivers without being asked, on both clients that have one.
 
 The hook calls a tool on the server that already holds the inbox, so there is no second process and nothing on the
-wire to test. What is worth pinning down is the shape of the answer -- Claude Code reads it as a hook decision,
-not as a tool result -- that the delivery really is a delivery, and that the tool stays out of every listing.
+wire to test. What is worth pinning down is the shape of the answer -- the client reads it as a hook decision, not
+as a tool result, and Claude Code and Codex end a turn through different doors -- that the delivery really is a
+delivery, and that the tool stays out of every listing.
 """
 
 import asyncio
@@ -39,10 +40,10 @@ async def radios(endpoint: str, monkeypatch) -> AsyncIterator[RadioFactory]:
         backend.close()
 
 
-async def hook(event: str = "Stop", tool_name: str = "") -> dict[str, Any]:
-    """What Claude Code would read back from the hook, parsed."""
+async def hook(event: str = "Stop", tool_name: str = "", client: str = "claude-code") -> dict[str, Any]:
+    """What the client would read back from the hook, parsed."""
     await asyncio.sleep(SETTLE)
-    return json.loads(await frontend.hook_report(event=event, tool_name=tool_name))
+    return json.loads(await frontend.hook_report(event=event, tool_name=tool_name, client=client))
 
 
 async def test_a_message_is_delivered_into_the_turn_rather_than_announced(radios: RadioFactory) -> None:
@@ -158,10 +159,48 @@ def test_a_body_is_delivered_whole(radios) -> None:
     assert frontend._shown({"from": {"name": "bob"}, "to": None, "body": body}).endswith(body)
 
 
-async def test_nothing_to_say_is_said_as_nothing(radios: RadioFactory) -> None:
+@pytest.mark.parametrize(
+    "client,event,continuation",
+    [
+        ("claude-code", "Stop", False),
+        ("claude-code", "PreToolUse", False),
+        ("codex", "PreToolUse", False),
+        ("codex", "Stop", True),
+        ("codex", "SubagentStop", True),
+    ],
+)
+async def test_each_client_is_answered_in_the_contract_it_reads(
+    radios: RadioFactory, client: str, event: str, continuation: bool
+) -> None:
+    """Same messages, two envelopes. Codex's Stop output schema admits no `hookSpecificOutput`, and puts text in
+    front of the model as `decision: "block"` with a `reason` it turns into a continuation prompt; everywhere else
+    both clients read `additionalContext`. `Stop` is spelled the same in both, so the caller says which contract it
+    speaks rather than having it inferred from the event name."""
+    listener = radios()
+    await listener.connect(FORUM, "ann")
+    talker = radios()
+    await talker.connect(FORUM, "bob")
+    await talker.resolve(None).send("the field is recipient_group now")
+
+    reply = await hook(event, client=client)
+    if continuation:
+        assert reply["decision"] == "block"
+        context = reply["reason"]
+    else:
+        assert reply["hookSpecificOutput"]["hookEventName"] == event
+        context = reply["hookSpecificOutput"]["additionalContext"]
+    assert "bob → everyone: the field is recipient_group now" in context
+    # Whichever door it came through, it was a delivery: the inbox agrees.
+    assert listener.resolve(None).pending_count() == 0
+
+
+@pytest.mark.parametrize("client", ["claude-code", "codex"])
+async def test_nothing_to_say_is_said_as_nothing(radios: RadioFactory, client: str) -> None:
     """The hook runs before every tool call, so silence is the common case and it has to be cheap and clean --
-    `suppressOutput` is a valid decision, where an empty string or a bare `{}` would be read as stray output."""
-    assert json.loads(await frontend.hook_report(event="Stop")) == {"suppressOutput": True}
+    `suppressOutput` is a valid decision, where an empty string or a bare `{}` would be read as stray output. It is
+    the one answer both contracts share: Codex's Stop schema carries the field as well, so silence needs no
+    dialect."""
+    assert json.loads(await frontend.hook_report(event="Stop", client=client)) == {"suppressOutput": True}
     quiet = radios()
     await quiet.connect(FORUM, "ann")
-    assert await hook("PreToolUse") == {"suppressOutput": True}
+    assert await hook("PreToolUse", client=client) == {"suppressOutput": True}

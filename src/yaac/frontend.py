@@ -402,18 +402,34 @@ def _hook_context() -> str:
     )
 
 
+# Codex ends a turn through a different door. Every other event it supports takes `hookSpecificOutput` with the
+# same field names Claude Code uses, but its `Stop` output schema admits no `hookSpecificOutput` at all -- the way
+# to put text in front of the model there is `decision: "block"` with a `reason`, which Codex turns into a
+# continuation prompt that acts as a new user prompt. Better placement than a footnote on a finished turn, and a
+# different shape to emit. `Stop` exists in both clients under the same name, so the caller has to say which
+# contract it is speaking rather than have it inferred from the event.
+CODEX = "codex"
+CONTINUATION_EVENTS = frozenset({"Stop", "SubagentStop"})
+
+
 async def hook_report(
     event: Annotated[str, Field(description="The hook event this answers, used to label the reply.")] = "Stop",
     tool_name: Annotated[str, Field(description="The tool about to run, when the event has one.")] = "",
+    client: Annotated[
+        str, Field(description="Whose hook contract to answer: 'codex', or Claude Code's by default.")
+    ] = "claude-code",
 ) -> str:
-    """Deliver newly arrived messages to a Claude Code hook. Called by the hook, not by you.
+    """Deliver newly arrived messages to a Claude Code or Codex hook. Called by the hook, not by you.
 
     Runs inside the process that holds the inbox, so it needs no socket and no query: this is the same memory
     `check_inbox` reads, and it reads it the same way -- the messages are collected, not merely counted. A `Stop`
     hook therefore cannot keep a turn alive over the same message twice, because the second call finds nothing.
+    That is what makes a loop impossible without consulting Codex's `stop_hook_active`, which a continuation prompt
+    would otherwise re-fire.
 
-    Returns the hook JSON contract as text rather than a result object: `additionalContext` is what reaches the
-    model, and `suppressOutput` is how to say nothing at all without it counting as a failure.
+    Returns the hook JSON contract as text rather than a result object: both clients read a tool's text exactly as
+    they read a command hook's stdout, so `suppressOutput` is how to say nothing at all without it counting as a
+    failure.
     """
     # Delivering immediately before check_inbox runs would take the messages out from under the call about to read
     # them, and the model would see the same text twice for its trouble.
@@ -422,6 +438,8 @@ async def hook_report(
     if not (context := _hook_context()):
         return json.dumps({"suppressOutput": True})
     log(f"hook: delivered new messages on {event}")
+    if client == CODEX and event in CONTINUATION_EVENTS:
+        return json.dumps({"decision": "block", "reason": context})
     return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}})
 
 
