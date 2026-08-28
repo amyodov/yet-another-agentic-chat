@@ -7,13 +7,16 @@ delivery, and that the tool stays out of every listing.
 """
 
 import asyncio
+import io
 import json
+import sys
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import pytest
 
 from yaac import frontend
+from yaac import hook as yaac_hook
 from yaac.backend import Backend
 
 FORUM = "forum"
@@ -192,6 +195,27 @@ async def test_each_client_is_answered_in_the_contract_it_reads(
     assert "bob → everyone: the field is recipient_group now" in context
     # Whichever door it came through, it was a delivery: the inbox agrees.
     assert listener.resolve(None).pending_count() == 0
+
+
+@pytest.mark.parametrize(
+    "payload,speaks",
+    [
+        ({"hook_event_name": "Stop", "stop_hook_active": True}, False),
+        ({"hook_event_name": "Stop", "tool_name": "mcp__yaac__check_inbox"}, False),
+        ({"hook_event_name": "Stop"}, True),
+    ],
+    ids=["already-continued", "check_inbox-is-next", "first-time"],
+)
+def test_the_out_of_process_hook_says_it_once(monkeypatch, payload: dict[str, Any], speaks: bool, capsys) -> None:
+    """It reports a count rather than delivering, so nothing it does empties the inbox and a `Stop` that blocks
+    would find the same mail on the continuation it caused. Measured before this guard existed: the session
+    continued itself until it was killed. `stop_hook_active` is what Codex sets to break exactly that."""
+    waiting = {"connections": [{"channel": "forum", "name": "ann", "unread": 2}]}
+    monkeypatch.setattr(yaac_hook, "ask", lambda key: {"session": key, **waiting})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(sys, "argv", ["yaac-hook", "--key", "a-session"])
+    yaac_hook.main()
+    assert ("decision" in capsys.readouterr().out) == speaks
 
 
 @pytest.mark.parametrize("client", ["claude-code", "codex"])

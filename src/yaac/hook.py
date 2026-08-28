@@ -74,7 +74,18 @@ def main() -> None:
         print(silence(CODEX))
         return
 
-    session = payload.get("session_id") or session_key()
+    # A continuation prompt ends in another Stop, which would find the same unread mail and continue again --
+    # measured, and it ran until it was killed. The in-process hook cannot loop because delivering there consumes;
+    # this one only reports a count, so it needs the flag Codex sets for exactly this. Said once per turn is
+    # enough: a model that ignores it is choosing to, and a message stays in the inbox either way.
+    if payload.get("stop_hook_active"):
+        print(silence(CODEX))
+        return
+
+    # --key is how a Codex user names the session, since Codex tells a server nothing about which thread it
+    # serves. Given, it wins: stdin's session_id is right only when the server was told the same value.
+    given = sys.argv[sys.argv.index("--key") + 1] if "--key" in sys.argv[:-1] else None
+    session = given or session_key() or payload.get("session_id")
     answer = ask(session) if session else None
     if not answer or not any(connection.get("unread") for connection in answer.get("connections", [])):
         print(silence(CODEX))

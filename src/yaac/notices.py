@@ -23,9 +23,16 @@ import socket
 from collections.abc import Callable
 from typing import Any
 
-SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
-"""Where each client puts the id it gives every child process. Measured, not guessed: a Codex hook reads the same
-value on stdin as `session_id`, and Claude Code's is already recorded as equal to a hook's `session_id`."""
+SESSION_ENV = ("YAAC_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
+"""Names under which this process may already know which session it belongs to, best first.
+
+Claude Code puts `CLAUDE_CODE_SESSION_ID` in the environment of the server it spawns, and gives a hook the same
+value as `session_id` on stdin, so its two halves find each other with nothing configured.
+
+Codex does not: measured on 0.147.0, a server it spawns has neither `CODEX_THREAD_ID` nor anything else naming
+the thread, though its hooks do get `session_id`. So the halves cannot derive a shared value and have to be told
+one -- `env` on the server in `config.toml`, `--key` on the hook in `hooks.json`, the same string in both. That is
+why `YAAC_SESSION` comes first: it is the only one a user sets, and setting it should win."""
 
 # Below the ephemeral range on every platform (Linux starts at 32768, macOS and Windows higher still), so the
 # kernel will not hand one of these out as a source port and collide with a listener that is about to exist.
