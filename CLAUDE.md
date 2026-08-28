@@ -88,9 +88,20 @@ and can still change the answer. `Server.middleware` would be tidier, and the SD
 Cross-client delivery is measured, not argued: a Claude Code session and a Codex session exchanged messages both
 ways on one channel, each running its own server process.
 
-**MCP cannot push into an idle session.** Nothing in the server→client set (`notifications/message`,
-`resources/updated`, `list_changed`, `sampling/createMessage`, `elicitation/create`) reaches the model's context.
-Delivery is pull-only, so the tool descriptions have to carry the reminder to call `check_inbox`.
+**MCP cannot push into an idle session — read off the specification rather than measured here, and true of
+revision 2026-07-28, checked on 2026-08-28.** Every other entry in this section is a property of the world and
+stays true; this one describes a document under active revision and will expire, so read the changelog rather
+than this line. What it says today is that the direction of travel is away from push: a server may not initiate
+a request at all, and the schema has no `ServerRequest` type to do it with; `sampling/createMessage`, roots and
+logging are deprecated with a twelve-month window; and the one long-lived server→client stream,
+`subscriptions/listen`, carries a closed set of four change notifications, three with empty parameters and one
+carrying a URI and no body. Delivery is therefore pull-only, which is why the tool descriptions have to carry
+the reminder to call `check_inbox`.
+
+The roadmap's Triggers & Events working group is about telling a client that work it started has finished, not
+about unsolicited content; the one proposal for re-entering a model's turn (SEP-2495) is open, unsponsored, and
+answered by a maintainer with "the host owns the loop". That sentence is the whole reason delivery is a hook —
+a hook is a host mechanism, and the host is what owns the loop.
 
 **A Claude Code hook can call a tool on the MCP server it is bundled with, in the same process.** `type:
 "mcp_tool"` names a `server` and a `tool`; for a plugin-bundled server the name is the scoped
@@ -98,6 +109,30 @@ Delivery is pull-only, so the tool descriptions have to carry the reminder to ca
 a command hook's stdout: valid JSON is taken as a decision object, anything else as plain output. So `hook_report`
 returns a JSON string rather than a result dict — a tool result shaped like a tool result parses fine, matches no
 decision field, and is silently discarded.
+
+Measured live on 2026-08-28, with the hooks wired into `.claude/settings.local.json` against a server running
+from the working tree: a message sent by a second process arrived beside the next tool result on `PreToolUse`,
+`check_inbox` then found the inbox empty, and `Stop` reopened a turn that had already ended. So the one
+undocumented assumption holds -- **a tool absent from every `tools/list` can still be called by name from a
+hook.** For a server that is not plugin-bundled the `server` field is the bare key, `yaac`, and Claude Code's
+file watcher picks up a new hooks block with no restart.
+
+**Codex reads the same contract, with one different door.** `codex-cli` 0.147.0 supports `command` and `mcp_tool`
+handlers -- `prompt` and `agent` are parsed and skipped -- and joins an MCP tool's text blocks before running them
+through the same output parser a command hook's stdout goes through, so returning a JSON string works there for
+the same reason. Its binary carries `hookSpecificOutput`, `additionalContext` and `hookEventName`, so most events
+are answered identically. `Stop` is the exception: its output schema admits no `hookSpecificOutput`, and text
+reaches the model as `decision: "block"` with a `reason`, which Codex turns into a continuation prompt acting as a
+new user prompt. `Stop` is spelled the same in both clients, so `hook_report` takes the contract as an argument
+the hooks file sets rather than inferring it. Consumption still makes a loop impossible: the continuation re-fires
+`Stop`, which finds nothing, so `stop_hook_active` needs no consulting.
+
+**Claude Code captures an MCP server's stderr only while it connects.** It keeps a log per server under
+`~/Library/Caches/claude-cli-nodejs/<project>/mcp-logs-<server>/`, and the startup line is there as
+`"stderr: [yaac] dormant ..."` -- but `on air as ...` from a real join appears in no file this project has ever
+written. So the log is not a place a running server can leave a trace for anything else to watch, and waking an
+idle session needs a channel or a socket of our own rather than a tail. This is a client's internal cache layout,
+undocumented and free to move.
 
 That is why nothing about delivery touches the wire. The hook runs inside the process that owns the inbox, so
 there is no second process to find, no socket to open, no session identifier to pass around, and the hat is not
