@@ -38,6 +38,9 @@ dependencies = [
 yaac = "yaac.frontend:main"
 # Same entry point under the distribution name, so bare `uvx yet-another-agentic-chat` finds an executable to run.
 yet-another-agentic-chat = "yaac.frontend:main"
+# What a Codex hook runs: that client's hooks cannot call an MCP tool, so a program asks the notice socket instead
+# and prints the hook contract. Stdlib only, because its startup cost is paid on every hook the session fires.
+yaac-hook = "yaac.hook:main"
 # The terminal client, deliberately not a flag on the server: one writes nothing to stdout because stdout is the
 # transport, the other owns the screen. Its textual dependency is the `chat` extra, so an MCP-only install stays
 # to pyzmq and mcp -- `uvx --from "yet-another-agentic-chat[chat]" yaac-chat`.

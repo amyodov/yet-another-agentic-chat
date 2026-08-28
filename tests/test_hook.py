@@ -200,7 +200,10 @@ async def test_nothing_to_say_is_said_as_nothing(radios: RadioFactory, client: s
     `suppressOutput` is a valid decision, where an empty string or a bare `{}` would be read as stray output. It is
     the one answer both contracts share: Codex's Stop schema carries the field as well, so silence needs no
     dialect."""
-    assert json.loads(await frontend.hook_report(event="Stop", client=client)) == {"suppressOutput": True}
+    # Codex rejects `suppressOutput` on PreToolUse and accepts an empty object everywhere, so silence has a
+    # dialect after all -- measured against codex-cli 0.147.0, which reports the hook as failed otherwise.
+    expected = {} if client == "codex" else {"suppressOutput": True}
+    assert json.loads(await frontend.hook_report(event="Stop", client=client)) == expected
     quiet = radios()
     await quiet.connect(FORUM, "ann")
-    assert await hook("PreToolUse", client=client) == {"suppressOutput": True}
+    assert await hook("PreToolUse", client=client) == expected

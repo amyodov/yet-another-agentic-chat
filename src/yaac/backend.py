@@ -36,6 +36,7 @@ from zmq.utils.monitor import parse_monitor_message
 
 from . import protocol
 from .hat import Hat
+from .notices import Notices, describe_arrival
 from .protocol import Address
 
 DEFAULT_ENDPOINT = "tcp://127.0.0.1:19116"
@@ -230,6 +231,8 @@ class Membership:
 
     def _append(self, message: dict[str, Any]) -> None:
         self.inbox.append(message)
+        # Told to whoever is watching from outside this process, because nothing else can see an inbox move.
+        self.backend.notices.announce(describe_arrival(self.channel, self.name, message))
         self._changed()
 
     def _changed(self) -> None:
@@ -294,6 +297,10 @@ class Backend:
         self.hat: Hat | None = None
         self.memberships: dict[str, Membership] = {}
         self._tasks: set[asyncio.Task] = set()
+        # Opened with the first membership and closed with the last, so a dormant process still listens on nothing.
+        # Notices are an extra: everything works without a reader, and nothing here is on the delivery path.
+        self.notices = Notices()
+        self.notices.snapshot = self.describe_all
 
     # -- state -----------------------------------------------------------
 
@@ -385,6 +392,7 @@ class Backend:
             raise
 
         self.memberships[membership.routing_id] = membership
+        await self.notices.start()
         log(f"on air as {name!r} on {channel!r} ({'hat' if self.is_wearing_hat else 'participant'})")
         return Connection(
             connection_id=membership.routing_id,
@@ -483,6 +491,9 @@ class Backend:
         """Give up the ROUTER and the election loop once no membership is left, so a dormant process holds nothing."""
         if self.memberships:
             return
+        # Spawned rather than awaited: this runs from synchronous paths, and a closing listener has nobody waiting.
+        if self.notices.port is not None:
+            asyncio.ensure_future(self.notices.stop())
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()

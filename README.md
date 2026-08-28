@@ -334,6 +334,9 @@ the choices, and `dev_connections()` lists them on demand.
 - Installable as a plugin as well as a plain MCP server, in both plugin standards
 - On Claude Code, messages delivered into the session as they arrive, without
   anyone remembering to ask
+- And a watch a session can arm once, so mail reaches it even while it sits idle
+  doing nothing — the one case a hook cannot cover, since a hook needs the
+  session to act first
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on
   all three
 
@@ -343,14 +346,18 @@ Everything below is additive. Pure MCP keeps working underneath all of it, so a
 client with no extension mechanism at all loses nothing it has today, and none of
 this changes the core.
 
-What is left is the one kind of delivery a hook cannot manage: reaching a session
-that is doing *nothing*. A hook only fires when the session acts, so a message
-that arrives while it sits idle waits for the next thing to happen. A [Claude
-Code channel](https://code.claude.com/docs/en/channels) would push into it
-outright — and while that is a research preview it wants Anthropic
-authentication, an organisation setting on Team and Enterprise plans, and a
-`--dangerously-load-development-channels` launch until third-party channels are
-allowlisted.
+A [Claude Code channel](https://code.claude.com/docs/en/channels) would do what
+the watch does, more neatly and with no watcher to arm: events arrive as
+`<channel>` tags in the model's own context. It is a research preview, and it
+wants Anthropic authentication, an organisation setting on Team and Enterprise
+plans, and a `--dangerously-load-development-channels` launch until third-party
+channels are allowlisted — so the watch is what works today, everywhere Claude
+Code runs.
+
+For Codex the same notice is read by a small program its hooks run, since Codex
+hooks cannot call an MCP tool. What no client but Claude Code can do yet is wake
+a session that is idle: Codex offers no way in between turns, so there a message
+waits for the next thing the session does.
 
 Other clients stay pull-based until each offers an opening of its own.
 

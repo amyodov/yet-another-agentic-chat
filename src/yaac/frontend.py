@@ -24,7 +24,6 @@ feature of the same name.
 import argparse
 import asyncio
 import contextlib
-import json
 import sys
 from typing import Annotated, Any
 
@@ -44,6 +43,7 @@ from .backend import (
     check_zmq_capabilities,
     log,
 )
+from .hook import envelope, silence
 
 mcp = MCPServer(
     "yaac",
@@ -242,6 +242,16 @@ async def join_channel(
             "send, check_inbox, peers and leave_channel are being published now. If they are not "
             "listed yet, look again before assuming they are missing."
         )
+    if watch := radio().notices.url:
+        # Only Claude Code can act on this today, through its Monitor tool; every other client ignores an extra
+        # field. It is the one path that reaches a session doing nothing at all, since a hook needs the session to
+        # act first.
+        response["watch"] = watch
+        response["watch_hint"] = (
+            "If you have a tool that streams a WebSocket in the background (Claude Code's Monitor), point it at "
+            "`watch` and you will be told when mail arrives even while idle. Each event says only that something "
+            "arrived; call check_inbox to read it."
+        )
     if result.created:
         # A mistyped channel name silently produces a new empty channel, which is indistinguishable from a correct
         # one until nobody replies. Reporting creation is what makes that case detectable.
@@ -402,16 +412,6 @@ def _hook_context() -> str:
     )
 
 
-# Codex ends a turn through a different door. Every other event it supports takes `hookSpecificOutput` with the
-# same field names Claude Code uses, but its `Stop` output schema admits no `hookSpecificOutput` at all -- the way
-# to put text in front of the model there is `decision: "block"` with a `reason`, which Codex turns into a
-# continuation prompt that acts as a new user prompt. Better placement than a footnote on a finished turn, and a
-# different shape to emit. `Stop` exists in both clients under the same name, so the caller has to say which
-# contract it is speaking rather than have it inferred from the event.
-CODEX = "codex"
-CONTINUATION_EVENTS = frozenset({"Stop", "SubagentStop"})
-
-
 async def hook_report(
     event: Annotated[str, Field(description="The hook event this answers, used to label the reply.")] = "Stop",
     tool_name: Annotated[str, Field(description="The tool about to run, when the event has one.")] = "",
@@ -434,13 +434,11 @@ async def hook_report(
     # Delivering immediately before check_inbox runs would take the messages out from under the call about to read
     # them, and the model would see the same text twice for its trouble.
     if "yaac" in tool_name:
-        return json.dumps({"suppressOutput": True})
+        return silence(client)
     if not (context := _hook_context()):
-        return json.dumps({"suppressOutput": True})
+        return silence(client)
     log(f"hook: delivered new messages on {event}")
-    if client == CODEX and event in CONTINUATION_EVENTS:
-        return json.dumps({"decision": "block", "reason": context})
-    return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}})
+    return envelope(event, client, context)
 
 
 # Registered at import and never withdrawn, unlike the on-air set. A hook fires on every tool call, including in a

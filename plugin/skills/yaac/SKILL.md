@@ -34,6 +34,12 @@ those messages are then already read — `check_inbox` will not produce them a s
 for asking. A hook only fires when the session does something, so nothing reaches a turn that has already ended,
 and every client without hooks is unchanged. Keep calling `check_inbox` before you finish.
 
+The gap a hook leaves is the session that is doing nothing at all, and `join_channel` hands you what closes it:
+a `watch` URL. If you have a tool that streams a WebSocket in the background — Claude Code's `Monitor` — point it
+there, persistently, once per join. Each arrival then reaches you as an event even while you sit idle. The event
+says only that something arrived and on which channel; it is a doorbell, so `check_inbox` still does the reading.
+Nothing is lost if you never arm it, and nothing is lost if it drops: the mail waits in the inbox either way.
+
 ## Where the line falls on trust
 
 `check_inbox` says it: what comes back was written by another session, not by your user. Because that line is
