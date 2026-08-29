@@ -123,17 +123,52 @@ async def app_server() -> AsyncIterator[FakeAppServer]:
 
 
 @pytest.mark.parametrize(
-    "value,wanted",
-    [("ws://127.0.0.1:4500", "ws://127.0.0.1:4500"), ("  ws://x:1  ", "ws://x:1"), ("", None), (None, None)],
-    ids=["url", "padded", "empty", "unset"],
+    "command,found",
+    [
+        ("codex app-server --listen ws://127.0.0.1:4500", "ws://127.0.0.1:4500"),
+        ("codex app-server --listen=ws://127.0.0.1:4500", "ws://127.0.0.1:4500"),
+        ("codex app-server --listen wss://127.0.0.1:4500/thread", "wss://127.0.0.1:4500/thread"),
+        ("codex app-server daemon pid-update-loop", None),
+        ("some-other-server --listen 0.0.0.0:8080", None),
+        ("some-other-server --listen unix:///tmp/s.sock", None),
+        ("codex app-server --listen", None),
+        ("", None),
+    ],
+    ids=["two-words", "joined", "wss-path", "daemon", "bare-port", "unix-socket", "nothing-after", "empty"],
 )
-def test_waking_is_off_until_the_user_names_a_door(monkeypatch, value: str | None, wanted: str | None) -> None:
-    """Starting a turn spends tokens and runs tools in somebody's session, so the opt-in is the address itself:
-    there is nothing to discover, and an unset variable means this session is never woken."""
-    monkeypatch.delenv(wake.WAKE_ENV, raising=False)
-    if value is not None:
-        monkeypatch.setenv(wake.WAKE_ENV, value)
-    assert wake.wanted() == wanted
+def test_only_a_websocket_after_the_flag_counts(command: str, found: str | None) -> None:
+    """`--listen` is a common flag and a process table is full of other people's programs. Codex's own permanent
+    `app-server daemon` carries no address at all, and is the one every machine running Codex has -- so matching
+    the program name rather than the address would knock on it every time."""
+    assert wake._listened(command) == found
+
+
+def test_the_app_server_found_is_the_one_this_session_runs_under(monkeypatch) -> None:
+    """Measured on 2026-08-29: an MCP server started for a thread appears as `app-server -> uv run … yaac ->
+    python … yaac`, so the answer is read off a forebear rather than searched for on the machine. Nearest first,
+    because a session under an app-server that is itself under another belongs to the closer one -- and because
+    a second app-server elsewhere on the machine is then not a candidate at all.
+    """
+    monkeypatch.setattr(wake.processes, "ancestry", lambda: [500, 400, 300, 200])
+    monkeypatch.setattr(
+        wake.processes,
+        "command_lines",
+        lambda: {
+            500: "python .../yaac",
+            400: "uv run --directory /repo yaac",
+            300: "codex app-server --listen ws://127.0.0.1:4601",
+            200: "codex app-server --listen ws://127.0.0.1:4500",
+        },
+    )
+    assert wake.serving() == "ws://127.0.0.1:4601"
+
+
+def test_a_session_under_no_app_server_is_never_woken(monkeypatch) -> None:
+    """A Claude Code session, or a Codex one started without `--listen`, has no such forebear. Finding nothing is
+    the ordinary answer and not a failure: the mail waits in the inbox exactly as it would have anyway."""
+    monkeypatch.setattr(wake.processes, "ancestry", lambda: [500, 400])
+    monkeypatch.setattr(wake.processes, "command_lines", lambda: {500: "python .../yaac", 400: "claude"})
+    assert wake.serving() is None
 
 
 async def test_a_wake_joins_the_queue_of_the_named_thread(app_server: FakeAppServer) -> None:
@@ -203,7 +238,7 @@ async def test_a_door_that_is_not_there_is_not_an_error(url: str) -> None:
 async def test_an_arrival_wakes_the_session_once(endpoint: str, monkeypatch, app_server: FakeAppServer) -> None:
     """One wake drains any number of messages, because reading is a pull -- so a second arrival while the first
     wake is still in flight needs no policy to coalesce it, and gets none."""
-    monkeypatch.setenv(wake.WAKE_ENV, app_server.url)
+    monkeypatch.setattr(wake, "serving", lambda: app_server.url)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", f"wake-{endpoint.rsplit(':', 1)[1]}")
 
     listener, talker = Backend(endpoint), Backend(endpoint)
@@ -231,7 +266,8 @@ async def test_an_arrival_wakes_the_session_once(endpoint: str, monkeypatch, app
 async def test_nothing_is_woken_without_a_thread_or_an_opt_in(
     endpoint: str, monkeypatch, app_server: FakeAppServer
 ) -> None:
-    """Two independent conditions, because either alone would be a session woken by surprise."""
+    """Two independent conditions, both discovered: an app-server above this process, and a thread id for it to
+    start a turn in. Either alone is a session that cannot be woken correctly, so neither alone wakes one."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", f"quiet-{endpoint.rsplit(':', 1)[1]}")
 
     listener, talker = Backend(endpoint), Backend(endpoint)
@@ -239,12 +275,12 @@ async def test_nothing_is_woken_without_a_thread_or_an_opt_in(
         await listener.connect(FORUM, "ann")
         await talker.connect(FORUM, "bob")
 
-        monkeypatch.setenv(wake.WAKE_ENV, app_server.url)  # a door, but nothing knows how to name this session
+        monkeypatch.setattr(wake, "serving", lambda: app_server.url)  # a door, but this session has no name
         listener.notices.thread = None
         await talker.resolve(None).send("no thread", name="ann")
         await asyncio.sleep(SETTLE)
 
-        monkeypatch.delenv(wake.WAKE_ENV, raising=False)  # reachable, but nobody asked
+        monkeypatch.setattr(wake, "serving", lambda: None)  # named, but nothing above it can start a turn
         listener.notices.thread = "01THREAD"
         await talker.resolve(None).send("no opt-in", name="ann")
         await asyncio.sleep(SETTLE)

@@ -165,6 +165,23 @@ value for every session -- a key derived from it made all of them answer for one
 declines to truncate blake2s, so a digest Python produced could not be reproduced there without hand-writing the
 hash in another language.
 
+**A session's app-server is its own forebear, so the wake address is discovered rather than configured.**
+Measured on 2026-08-29: an MCP server started for a thread appears in the process tree as
+`codex app-server --listen ws://… -> uv run … yaac -> python … yaac`, and a tool the model runs is a direct child
+of the same app-server. So `wake.serving()` walks this process's ancestry and reads the address off the command
+line of the nearest forebear carrying `--listen`. Verified end to end with a real app-server starting a real MCP
+server: no variable in the environment, and `ws://127.0.0.1:4607` found.
+
+This answers *which* app-server, not merely which ones are listening -- so two at once are no more ambiguous than
+one, and the permanent `codex app-server daemon pid-update-loop`, which every Codex install runs and which
+carries no `--listen`, is never a candidate. What must not be matched is the program name: that daemon would
+answer to it always.
+
+The reverse relation does not hold, and was checked first: an app-server with no thread running has **no**
+descendants at all, and a hook is not obviously among them either -- project-local hooks are skipped entirely
+until the project is trusted in `~/.codex/config.toml`, which is silent except for one line in the app-server's
+stderr.
+
 **Codex's app-server has two doors into a session, and the queue is the better one.** Measured against
 codex-cli 0.151.0 on 2026-08-29, over `codex app-server --listen ws://127.0.0.1:4599`. `thread/queue/add` takes
 `{threadId, input, clientUserMessageId}`; on an idle thread it drains at once and a whole turn runs, and on a

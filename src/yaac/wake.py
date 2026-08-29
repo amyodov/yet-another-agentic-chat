@@ -16,15 +16,21 @@ right one. It costs two things -- `capabilities.experimentalApi` in `initialize`
 answers `-32600`, and a `clientUserMessageId`, which it echoes back and nothing here reads. A server too old for
 it says `unknown variant 'thread/queue/add'`, and that is what the fallback is for.
 
-**The door is a WebSocket the user opens on purpose.** `codex app-server --listen ws://127.0.0.1:4500` serves the
-thread protocol over a local socket, and `YAAC_WAKE` is that URL. There is nothing to discover and nothing to
-guess: no daemon to find, no control socket, no relay, and no subprocess -- which also means no dependence on an
-event loop that can spawn one, and Windows runs the selector loop here because pyzmq must.
+**The door is a WebSocket the user opens on purpose, and the session finds it by looking up.**
+`codex app-server --listen ws://127.0.0.1:4500` serves the thread protocol over a local socket, and that app-server
+is this process's own forebear: measured on 2026-08-29, an MCP server started for a thread appears in the tree as
+`app-server -> uv run ... yaac -> python ... yaac`. So the URL is read off the command line of the ancestor that
+has it, which answers *which* app-server is running this session -- not merely which ones are listening on this
+machine. A second app-server, or the permanent `codex app-server daemon` that carries no `--listen` at all, is
+neither a candidate nor an ambiguity.
 
-Two things keep it modest. It is off unless the user sets the variable, because starting a turn spends tokens and
-runs tools in somebody's session, which a library should not decide unasked. And it names no `model`, `cwd` or
-`approvalPolicy`: `turn/start` requires only the thread and the input, so Codex answers those from the thread's
-own configuration rather than from our guess about it.
+Nothing is configured and nothing is guessed: no variable, no daemon to find, no control socket, no relay, and no
+subprocess of our own -- which also means no dependence on an event loop that can spawn one, and Windows runs the
+selector loop here because pyzmq must. A session not running under an app-server has no such ancestor, finds
+nothing, and is never woken.
+
+It names no `model`, `cwd` or `approvalPolicy`: the call requires only the thread and the input, so Codex answers
+those from the thread's own configuration rather than from our guess about it.
 """
 
 import asyncio
@@ -38,10 +44,9 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
-logger = logging.getLogger(__name__)
+from . import processes
 
-WAKE_ENV = "YAAC_WAKE"
-"""The app-server's WebSocket URL, and the whole of the opt-in. Unset means this session is never woken."""
+logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 15.0
 HANDSHAKE_KEY = base64.b64encode(b"yaac------------").decode("ascii")
@@ -49,10 +54,44 @@ HANDSHAKE_KEY = base64.b64encode(b"yaac------------").decode("ascii")
 guarding against a server that cannot help it anyway."""
 
 
-def wanted() -> str | None:
-    """Where to knock, or None when this session did not ask to be woken."""
-    url = os.environ.get(WAKE_ENV, "").strip()
-    return url or None
+LISTEN = "--listen"
+"""How the app-server is told which address to serve, and therefore where it is written down."""
+
+
+def serving() -> str | None:
+    """The app-server running this session, or None when nothing above us is one.
+
+    Nearest forebear first, so a session under an app-server that is itself under another answers with the one
+    that actually holds its thread.
+    """
+    lines = processes.command_lines()
+    for pid in processes.ancestry():
+        if (url := _listened(lines.get(pid, ""))) is not None:
+            logger.info("running under an app-server at %s (pid %d)", url, pid)
+            return url
+    return None
+
+
+def _listened(command: str) -> str | None:
+    """The WebSocket address in `--listen ws://…`, written either as two words or joined by `=`.
+
+    What follows the flag has to be a `ws://` or `wss://` address with a host in it, because `--listen` is a
+    common flag and a process table is full of other people's programs: a bare port, a Unix socket path, or a
+    quoted mention of the flag inside some other command's arguments are all things that would otherwise be
+    knocked on. Quotes are stripped because a command line preserves whatever shell quoting reached it.
+    """
+    words = command.split()
+    for index, word in enumerate(words):
+        candidate = ""
+        if word == LISTEN and index + 1 < len(words):
+            candidate = words[index + 1]
+        elif word.startswith(f"{LISTEN}="):
+            candidate = word[len(LISTEN) + 1 :]
+        candidate = candidate.strip("\"'")
+        parsed = urlparse(candidate)
+        if parsed.scheme in ("ws", "wss") and parsed.hostname:
+            return candidate
+    return None
 
 
 def _frame(text: str) -> bytes:
@@ -132,7 +171,7 @@ async def wake(thread: str, text: str, url: str | None = None, timeout: float = 
     mail is in the inbox either way, and a session that cannot be woken is exactly a session that reads its mail
     the next time it does something.
     """
-    if (endpoint := url or wanted()) is None:
+    if (endpoint := url or serving()) is None:
         return False
     parsed = urlparse(endpoint)
     host, port = parsed.hostname or "127.0.0.1", parsed.port or 80

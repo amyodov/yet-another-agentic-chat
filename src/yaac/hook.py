@@ -14,11 +14,10 @@ it says there is mail, and `check_inbox` hands it over.
 """
 
 import json
-import os
-import subprocess
 import sys
 from typing import Any
 
+from . import processes
 from .directory import directory
 from .notices import ask
 
@@ -59,72 +58,6 @@ def _waiting(answer: dict[str, Any]) -> str:
     )
 
 
-def _ancestry(depth: int = 12) -> set[int]:
-    """This process's line of descent. Used only to break a tie, and empty is an acceptable answer.
-
-    A hook and the server it belongs to are children of the same client process, so when two sessions are working
-    in one directory their ancestries are what still tells them apart. `/proc` where it exists, `ps` where it does
-    not, `ctypes` on Windows -- and silence if none of that works, because a tie left unbroken is reported as
-    nothing rather than as somebody else's mail.
-    """
-    line: set[int] = set()
-    current = os.getpid()
-    while current and current not in line and len(line) < depth:
-        line.add(current)
-        current = _parent(current) or 0
-    return line
-
-
-def _parent(pid: int) -> int | None:
-    if sys.platform == "win32":
-        return _parent_windows(pid)
-    try:
-        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
-            return int(stat.read().rpartition(")")[2].split()[1])
-    except OSError, IndexError, ValueError:
-        pass
-    try:
-        done = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
-    except OSError, subprocess.SubprocessError:
-        return None
-    return int(done.stdout.strip()) if done.stdout.strip().isdigit() else None
-
-
-def _parent_windows(pid: int) -> int | None:
-    """Windows keeps no `/proc` and its `ps` is not `ps`, so this reads the Toolhelp snapshot the API provides."""
-    import ctypes
-
-    class Entry(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", ctypes.c_ulong),
-            ("cntUsage", ctypes.c_ulong),
-            ("th32ProcessID", ctypes.c_ulong),
-            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
-            ("th32ModuleID", ctypes.c_ulong),
-            ("cntThreads", ctypes.c_ulong),
-            ("th32ParentProcessID", ctypes.c_ulong),
-            ("pcPriClassBase", ctypes.c_long),
-            ("dwFlags", ctypes.c_ulong),
-            ("szExeFile", ctypes.c_char * 260),
-        ]
-
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
-    if snapshot == -1:
-        return None
-    entry = Entry()
-    entry.dwSize = ctypes.sizeof(Entry)
-    try:
-        if not kernel32.Process32First(snapshot, ctypes.byref(entry)):
-            return None
-        while entry.th32ProcessID != pid:
-            if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
-                return None
-        return int(entry.th32ParentProcessID)
-    finally:
-        kernel32.CloseHandle(snapshot)
-
-
 def mine(sessions: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any] | None:
     """Which of the sessions on this machine is the one this hook belongs to.
 
@@ -143,7 +76,7 @@ def mine(sessions: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, A
         return candidates[0]
     if not candidates:
         return None
-    line = _ancestry()
+    line = set(processes.ancestry())
     related = [s for s in candidates if s.get("pid") in line]
     return related[0] if len(related) == 1 else None
 

@@ -84,6 +84,10 @@ def configure_logging() -> None:
     logger.propagate = False
 
 
+_UNASKED = "?"
+"""Distinguishes "not looked yet" from "looked, and there is no app-server above us"."""
+
+
 class NotConnected(Exception):
     """Raised when an operation needs a membership and there is none, or the connection id is unknown."""
 
@@ -208,6 +212,8 @@ class Membership:
             described["watch"] = url
         if client := self.backend.notices.client:
             described["client"] = client
+        if serving := self.backend.serving():
+            described["serving"] = serving
         return described
 
     async def _send_hello(self) -> None:
@@ -387,6 +393,7 @@ class Backend:
         self.notices = Notices()
         self.notices.snapshot = self.describe_all
         self._waking: asyncio.Task | None = None
+        self._serving: str | None = _UNASKED
 
     # -- state -----------------------------------------------------------
 
@@ -548,14 +555,15 @@ class Backend:
             await self.disconnect(connection_id)
 
     def rouse(self, membership: Membership) -> None:
-        """Wake this session, if it asked to be woken and something knows how to reach it.
+        """Wake this session, if something above it knows how to reach it.
 
-        Off unless `YAAC_WAKE` names the app-server's WebSocket: starting a turn spends tokens and runs tools in
-        somebody's session, which is not a decision to take on their behalf. Coalescing needs no policy -- one
-        wake drains any number of messages, because reading is a pull -- so a wake already in flight is left to
-        finish.
+        Two conditions, both discovered rather than configured: an app-server among this process's forebears, and
+        a thread id, which the hook reports because Codex tells a hook what it will not tell a server it spawns.
+        A session with neither is a session nobody can wake, which is exactly a session that reads its mail the
+        next time it does something. Coalescing needs no policy -- one wake drains any number of messages,
+        because reading is a pull -- so a wake already in flight is left to finish.
         """
-        if (url := wake.wanted()) is None or self.notices.thread is None or self._waking is not None:
+        if (url := self.serving()) is None or self.notices.thread is None or self._waking is not None:
             return
 
         async def rouse_once() -> None:
@@ -570,6 +578,12 @@ class Backend:
                 self._waking = None
 
         self._waking = self._spawn(rouse_once(), "yaac-wake")
+
+    def serving(self) -> str | None:
+        """The app-server running this session, looked up once. Ancestry does not change under a live process."""
+        if self._serving is _UNASKED:
+            self._serving = wake.serving()
+        return self._serving
 
     def describe_all(self) -> list[dict[str, Any]]:
         return [m.describe() for m in self.memberships.values()]

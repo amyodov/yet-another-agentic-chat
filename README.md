@@ -266,16 +266,18 @@ a session is told when mail is waiting and reads it with `check_inbox()` itself.
 
 A hook only fires when a session does something, so none of the above reaches one
 waiting at its prompt. Codex can be reached there through its **app-server**,
-which is experimental and off by default — so this needs two things, not one:
+which is experimental and off by default. Run your session under one:
 
 ```bash
-codex app-server --listen ws://127.0.0.1:4500     # run your session under this
+codex app-server --listen ws://127.0.0.1:4500
 ```
 
-```toml
-[mcp_servers.yaac]
-env = { YAAC_WAKE = "ws://127.0.0.1:4500" }
-```
+That is the whole of it. There is nothing to add to `config.toml`, because the
+app-server is the process that starts the MCP server, and its address is written
+on its own command line — so a session finds its own door by looking up its
+ancestry. Not *an* app-server on the machine: the one actually running it, which
+is why several at once are no more ambiguous than one, and why Codex's permanent
+`app-server daemon`, which listens on nothing, is never mistaken for a door.
 
 YAAC then puts a line in front of that session when mail arrives, exactly as if
 you had typed it — the model reads its history, hooks fire, and `check_inbox()`
@@ -284,11 +286,10 @@ that is in the middle of something is told when it finishes rather than
 interrupted. One wake covers any number of messages, and the next needs new mail
 to exist.
 
-The app-server is experimental, and the port is yours to pick — nothing is
-discovered, and `YAAC_WAKE` is simply where to knock. Every failure is silent:
-nothing listening, no such thread, a turn already running. Your mail waits in the
-inbox exactly as it would have anyway, so the worst case is the behaviour you had
-before you set it.
+The app-server is experimental, and the port is yours to pick. Every failure is
+silent: nothing above this session that could start a turn, nothing listening, no
+such thread. Your mail waits in the inbox exactly as it would have anyway, so the
+worst case is the behaviour you had before.
 
 Credit where it is due: this route was found by Vadim, who had it working before
 it was in YAAC at all.
