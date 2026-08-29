@@ -178,31 +178,6 @@ class Address:
 # Scopes -----------------------------------------------------------------
 
 
-class Absent:
-    """The difference between a field that is missing and one that is present and null.
-
-    `{}` addresses the hat -- no scope at all -- while `{"channel": null}` addresses the world channel, everybody.
-    A serializer that dropped null fields would turn a shout to everyone into a private question to the operator,
-    so absence is carried as its own value rather than represented by `None`, which already means something else.
-    """
-
-    _instance: Absent | None = None
-
-    def __new__(cls) -> Absent:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __repr__(self) -> str:
-        return "ABSENT"
-
-    def __bool__(self) -> bool:
-        return False
-
-
-ABSENT = Absent()
-
-
 @dataclass(frozen=True, slots=True)
 class Scope:
     """Who a message is for, or who it is from, as fields that compose.
@@ -212,43 +187,48 @@ class Scope:
     * `Scope(channel="forum")` -- everybody on that channel.
     * `Scope(peer=address)` -- that participant, wherever they are.
     * `Scope(channel="forum", peer=address)` -- that participant as a member of that channel.
-    * `Scope(channel=None)` -- the world channel, everybody there. Reserved: nothing builds it yet.
+
+    **A scope with no effective fields is the hat.** `null`, `{}`, `{"channel": null}` and `{"peer": null}` are
+    four spellings of the same emptiness, and all four read as the operator: an absence is an absence however it
+    was written, and nothing is served by making a reader tell them apart. `to_wire` emits one of them, `{}`, so
+    equal content still gives equal bytes.
+
+    That leaves no encoding for "everybody on the unnamed channel", and deliberately: an absence pretending to be
+    a value is a poor way to say *everyone*. If the world channel is ever built it says so positively, with a
+    marker of its own, which no serializer can quietly drop.
 
     Senders never transmit `from` at all; the hat stamps it from its own table, which is what makes `from: {}`
     unforgeable by construction rather than by validation.
     """
 
-    channel: str | None | Absent = ABSENT
-    peer: Address | None | Absent = ABSENT
+    channel: str | None = None
+    peer: Address | None = None
 
     def to_wire(self) -> dict[str, Any]:
-        """Only the fields that are present, and a present null stays null."""
+        """Only the fields that carry something. The hat is `{}`, the one spelling this ever writes."""
         wire: dict[str, Any] = {}
-        if not isinstance(self.channel, Absent):
+        if self.channel is not None:
             wire["channel"] = self.channel
-        if not isinstance(self.peer, Absent):
-            wire["peer"] = self.peer.to_wire() if self.peer is not None else None
+        if self.peer is not None:
+            wire["peer"] = self.peer.to_wire()
         return wire
 
     @classmethod
     def from_wire(cls, value: Any) -> Scope:
-        """Parse a scope. A missing key is absent; a key whose value is null is present and null."""
+        """Parse a scope, forgiving every spelling of empty. `null` is accepted as readily as `{}`."""
+        if value is None:
+            return cls()
         if not isinstance(value, dict):
-            raise ValueError(f"a scope must be an object, got {type(value).__name__}")
-        channel: str | None | Absent = ABSENT
-        if "channel" in value:
-            channel = value["channel"]
-            if channel is not None and not isinstance(channel, str):
-                raise ValueError("scope channel must be a string or null")
-        peer: Address | None | Absent = ABSENT
-        if "peer" in value:
-            peer = Address.from_wire(value["peer"])
-        return cls(channel=channel, peer=peer)
+            raise ValueError(f"a scope must be an object or null, got {type(value).__name__}")
+        channel = value.get("channel")
+        if channel is not None and not isinstance(channel, str):
+            raise ValueError("scope channel must be a string or null")
+        return cls(channel=channel, peer=Address.from_wire(value.get("peer")))
 
     @property
     def is_the_hat(self) -> bool:
-        """True only for a scope with no fields at all -- not for one naming a null channel, which is the world."""
-        return isinstance(self.channel, Absent) and isinstance(self.peer, Absent)
+        """True when nothing is addressed, however that was written."""
+        return self.channel is None and self.peer is None
 
 
 # Data messages ----------------------------------------------------------

@@ -282,34 +282,36 @@ def test_a_malformed_address_is_rejected_rather_than_coerced(value: Any) -> None
     "scope,wire",
     [
         (Scope(), {}),
-        (Scope(channel=None), {"channel": None}),
         (Scope(channel="forum"), {"channel": "forum"}),
         (Scope(peer=Address("Bob")), {"peer": {"name": "Bob", "zmq_routing_id": None}}),
         (
             Scope(channel="forum", peer=Address("Bob")),
             {"channel": "forum", "peer": {"name": "Bob", "zmq_routing_id": None}},
         ),
-        (Scope(peer=None), {"peer": None}),
     ],
-    ids=["hat", "world", "channel", "peer", "channel-and-peer", "null-peer"],
+    ids=["hat", "channel", "peer", "channel-and-peer"],
 )
 def test_a_scope_carries_exactly_the_fields_it_was_given(scope: Scope, wire: dict) -> None:
-    """Absence and null are different answers to the same question, in both directions. `{}` addresses the hat;
-    `{"channel": null}` addresses the world channel, everybody. A serializer that dropped nulls would turn a shout
-    to everyone into a private question to the operator, so the round trip is asserted each way rather than
-    assumed."""
+    """One spelling out, so equal content gives equal bytes."""
     assert scope.to_wire() == wire
     assert Scope.from_wire(wire) == scope
 
 
-def test_the_hat_is_the_only_scope_with_nothing_in_it() -> None:
-    """The distinction the whole discipline exists for: no fields at all means the operator, and a null channel
-    means everybody. They must not collapse, and neither must their reverse readings -- `from: {}` is the hat
-    speaking, `from: {"channel": null}` is somebody speaking where everyone hears."""
-    assert Scope().is_the_hat
-    assert not Scope(channel=None).is_the_hat
-    assert protocol.dumps(Scope().to_wire()) != protocol.dumps(Scope(channel=None).to_wire())
-    assert Scope.from_wire({}) != Scope.from_wire({"channel": None})
+@pytest.mark.parametrize(
+    "value",
+    [None, {}, {"channel": None}, {"peer": None}, {"channel": None, "peer": None}],
+    ids=["null", "empty", "null-channel", "null-peer", "both-null"],
+)
+def test_every_spelling_of_empty_addresses_the_hat(value: Any) -> None:
+    """An absence is an absence however it was written, and nothing is served by making a reader tell four
+    spellings apart. Writing stays canonical -- `{}` is the only one this ever emits -- so a forgiving parser
+    costs the format nothing.
+
+    It leaves "everybody on the unnamed channel" without an encoding, deliberately: if the world channel is ever
+    built it says so with a marker of its own, rather than by an absence a serializer could drop.
+    """
+    assert Scope.from_wire(value).is_the_hat
+    assert Scope.from_wire(value).to_wire() == {}
 
 
 @pytest.mark.parametrize(
