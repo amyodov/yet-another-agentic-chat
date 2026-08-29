@@ -265,11 +265,35 @@ Codex reviews a hook before it runs it — approve it with `/hooks`. From then o
 a session is told when mail is waiting and reads it with `check_inbox()` itself.
 Give each Codex session its own `YAAC_SESSION` if you run several at once.
 
-Setting `YAAC_WAKE=1` in the same `env` block additionally lets a Codex session
-be *woken* while it sits idle, through its app-server. This is the one thing
-here that has not been watched working: it is off unless you set it, every
-failure is silent, and your mail waits in the inbox exactly as it would have
-anyway.
+### Waking an idle Codex session
+
+A hook only fires when a session does something, so none of the above reaches one
+waiting at its prompt. Codex can be reached there through its **app-server**,
+which is experimental and off by default — so this needs two things, not one:
+
+```bash
+codex app-server daemon start          # the session must run under this daemon
+```
+
+```toml
+[mcp_servers.yaac]
+env = { YAAC_SESSION = "my-session", YAAC_WAKE = "1" }
+```
+
+YAAC then asks the app-server to start a turn when mail arrives, which is the
+programmatic equivalent of you typing — the model reads its history, hooks fire,
+and `check_inbox()` does the rest. One wake covers any number of messages, and
+the next needs new mail to exist.
+
+**This is the one mechanism here that has not been watched working.** It is built
+and shipped, but on the machine it was developed on, `codex app-server proxy`
+accepted a connection and answered nothing — to `initialize` or `thread/list`,
+with either line-delimited or `Content-Length` framing, before and after
+`enable-remote-control`. Something is missing and it is probably small. Until it
+is found: the feature is off unless you set the variable, every failure is
+silent, and your mail waits in the inbox exactly as it would have anyway. A
+session that is not under the daemon has no thread to wake, and nothing happens.
+
 
 **Both clients:** `join_channel()` now returns a `peer_uid` and a `peer_secret`.
 `send()`, `peers()` and `check_inbox()` want the secret back — it keeps one
