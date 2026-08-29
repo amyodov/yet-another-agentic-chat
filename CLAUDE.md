@@ -153,6 +153,34 @@ one every version has answered — `channels?` — and rely on a ROUTER handling
 `channels` reply arriving with no answer before it proves the peer read the new query and had nothing to say.
 Measured against a real 0.3.0 hat, that turned a 1.0 s timeout into 0.13 s.
 
+**A connect to a closed local port does not fail fast on Windows.** Measured in the field by Vadim: walking
+eight candidate ports cost 8.2 s on every hook event, where the same walk on macOS and Linux is immediate --
+`ECONNREFUSED` comes back on the loopback at once there. This is why nothing in YAAC probes a range of addresses:
+the notice socket takes whatever port the kernel offers and publishes it, and the hat's `sessions` directory is
+where a hook reads it.
+
+Two other reasons the derivation it replaced was wrong, both properties of the world rather than of our code.
+Codex keeps one `mcp_servers` block for a whole machine, so any per-session value put in its `env` is the same
+value for every session -- a key derived from it made all of them answer for one inbox. And Node's `crypto`
+declines to truncate blake2s, so a digest Python produced could not be reproduced there without hand-writing the
+hash in another language.
+
+**Codex's app-server has two doors into a session, and the queue is the better one.** Measured against
+codex-cli 0.151.0 on 2026-08-29, over `codex app-server --listen ws://127.0.0.1:4599`. `thread/queue/add` takes
+`{threadId, input, clientUserMessageId}`; on an idle thread it drains at once and a whole turn runs, and on a
+thread already working it waits its place. `turn/start` on a busy thread does not refuse -- it answers with a
+second turn id, `status: inProgress`, alongside the first. So the queue is what YAAC knocks with, and
+`turn/start` is only the fallback.
+
+Two things it costs. `capabilities: {"experimentalApi": true}` in `initialize`, without which the queue answers
+`-32600`; and `clientUserMessageId`, echoed back and read by nobody here, without which the call is refused for a
+missing field. An app-server too old for the queue answers `-32600` naming the method --
+``unknown variant `thread/queue/add` `` -- which is the only thing separating it from `-32600` for a thread that
+does not exist. Both facts are visible in the binary's strings as well as on the wire.
+
+Found by Vadim, who had the queue working before YAAC did; the busy-thread comparison and the fallback's
+discrimination were measured here.
+
 **Binding a busy port fails in ~0.4 ms** with `EADDRINUSE`. That is why every backend can just try.
 
 **Windows needs the selector event loop** (found in pyzmq `zmq/asyncio.py`; measured since — the CI Windows job runs

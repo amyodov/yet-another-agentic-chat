@@ -1,5 +1,7 @@
 {
+  "description": "YAAC: tells this Codex session when other sessions have sent it messages. Nothing to configure -- the hook finds its own session through the rendezvous point. See 'Getting messages sooner' in the README.",
   "hooks": {
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "python3 -c \"import json,sys\npayload=json.loads(sys.stdin.read() or '{}')\nprint(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': 'HOOK-SEES session_id=%s turn_id=%s' % (payload.get('session_id'), payload.get('turn_id'))}}))\""}]}]
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "uv run yaac-hook"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "uv run yaac-hook"}]}]
   }
 }

@@ -48,14 +48,14 @@ Each session logs to stderr, which your client will show as MCP server output:
 
 `.codex/hooks.json` in this repository wires the delivery hooks for a Codex
 session opened here, so working on YAAC means dogfooding it. It runs
-`uv run yaac-hook --key yaac-dev`, which only finds anything if the server it
-talks to was launched with the same name:
+`uv run yaac-hook`, which finds the working tree's own server the same way the
+published one does — through the directory the hat keeps — so the only thing to
+say is where that server lives:
 
 ```toml
 [mcp_servers.yaac]
 command = "uv"
 args = ["run", "--directory", "/path/to/yet-another-agentic-chat", "yaac"]
-env = { YAAC_SESSION = "yaac-dev" }
 ```
 
 Codex asks you to trust a hook before running it (`/hooks`), and re-asks when

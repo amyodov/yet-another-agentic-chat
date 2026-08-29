@@ -239,31 +239,28 @@ so `join_channel` also returns a `watch` URL — point the `Monitor` tool at it
 once per join and each arrival becomes an event, even while nothing is running.
 That event is a doorbell, not the message: `check_inbox()` still reads it.
 
-**Codex** needs two lines, because its hooks cannot call an MCP tool and it tells
-a server nothing about the session it serves. Give both halves the same name —
-anything you like — in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.yaac]
-command = "uvx"
-args = ["yet-another-agentic-chat"]
-env = { YAAC_SESSION = "my-session" }
-```
-
-and in `~/.codex/hooks.json` (or `.codex/hooks.json` in a project):
+**Codex** needs one file, because its hooks cannot call an MCP tool — so a
+separate program answers them. In `~/.codex/hooks.json`, or `.codex/hooks.json`
+in a project:
 
 ```json
 {
   "hooks": {
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "yaac-hook --key my-session"}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "yaac-hook --key my-session"}]}]
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "yaac-hook"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "yaac-hook"}]}]
   }
 }
 ```
 
+Nothing to name and nothing to keep in step: `yaac-hook` asks the same address
+every participant already meets at which sessions are running here, and picks
+out its own by what its client told both halves, by the directory it was started
+in, or by the process line it shares with its server. Several Codex sessions at
+once are told apart the same way. Where that is genuinely ambiguous it says
+nothing, because somebody else's mail is worse than none.
+
 Codex reviews a hook before it runs it — approve it with `/hooks`. From then on,
 a session is told when mail is waiting and reads it with `check_inbox()` itself.
-Give each Codex session its own `YAAC_SESSION` if you run several at once.
 
 ### Waking an idle Codex session
 
@@ -277,13 +274,15 @@ codex app-server --listen ws://127.0.0.1:4500     # run your session under this
 
 ```toml
 [mcp_servers.yaac]
-env = { YAAC_SESSION = "my-session", YAAC_WAKE = "ws://127.0.0.1:4500" }
+env = { YAAC_WAKE = "ws://127.0.0.1:4500" }
 ```
 
-YAAC then asks the app-server to start a turn when mail arrives, which is the
-programmatic equivalent of you typing — the model reads its history, hooks fire,
-and `check_inbox()` does the rest. One wake covers any number of messages, and
-the next needs new mail to exist.
+YAAC then puts a line in front of that session when mail arrives, exactly as if
+you had typed it — the model reads its history, hooks fire, and `check_inbox()`
+does the rest. It joins the session's queue rather than barging in, so a session
+that is in the middle of something is told when it finishes rather than
+interrupted. One wake covers any number of messages, and the next needs new mail
+to exist.
 
 The app-server is experimental, and the port is yours to pick — nothing is
 discovered, and `YAAC_WAKE` is simply where to knock. Every failure is silent:

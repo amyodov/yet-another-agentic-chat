@@ -1,7 +1,7 @@
 """Waking a Codex session that is sitting idle, which a hook cannot do.
 
 A hook fires when a session acts; this fires when mail arrives. It is an alarm clock rather than a postman --
-`turn/start` begins a turn and `check_inbox` still does the reading.
+`thread/queue/add` puts a line in front of the session and `check_inbox` still does the reading.
 
 The door is a WebSocket the user opens on purpose: `codex app-server --listen ws://127.0.0.1:4500`. So these run
 against a real socket speaking the app-server's shape, rather than against a mock of it -- the framing, the
@@ -31,15 +31,20 @@ WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 class FakeAppServer:
     """The smallest thing that behaves like `codex app-server --listen ws://…`.
 
-    It answers `initialize`, answers `turn/start`, and -- deliberately -- talks over itself first: the real one
-    emits `remoteControl/status/changed` and `thread/started` between a request and its reply, which is what
+    It answers `initialize`, answers `thread/queue/add`, and -- deliberately -- talks over itself first: the real
+    one emits `remoteControl/status/changed` and `thread/started` between a request and its reply, which is what
     makes matching on the id necessary rather than tidy.
+
+    `queueless` is the app-server from before the queue existed, which answers exactly as codex-cli does: -32600
+    naming the method it could not parse. Distinguishing that from -32600 for a thread it does not have is the
+    whole of the fallback, so a fake that answered a tidier error would agree with a wrong implementation.
     """
 
-    def __init__(self, refuse: bool = False, chatty: bool = True) -> None:
+    def __init__(self, refuse: bool = False, chatty: bool = True, queueless: bool = False) -> None:
         self.requests: list[dict[str, Any]] = []
         self.refuse = refuse
         self.chatty = chatty
+        self.queueless = queueless
         self.server: asyncio.Server | None = None
 
     @property
@@ -76,10 +81,15 @@ class FakeAppServer:
                 self.requests.append(message)
                 if self.chatty:
                     self._send(writer, {"method": "thread/started", "params": {}})
-                if self.refuse:
-                    self._send(writer, {"id": message["id"], "error": {"code": -32602, "message": "no such thread"}})
-                else:
-                    self._send(writer, {"id": message["id"], "result": {"turn": {"status": "inProgress"}}})
+                match message["method"]:
+                    case "thread/queue/add" if self.queueless:
+                        error = {"code": -32600, "message": "Invalid request: unknown variant `thread/queue/add`"}
+                        self._send(writer, {"id": message["id"], "error": error})
+                    case _ if self.refuse:
+                        error = {"code": -32602, "message": "no such thread"}
+                        self._send(writer, {"id": message["id"], "error": error})
+                    case _:
+                        self._send(writer, {"id": message["id"], "result": {"turn": {"status": "inProgress"}}})
                 await writer.drain()
 
     @staticmethod
@@ -126,17 +136,39 @@ def test_waking_is_off_until_the_user_names_a_door(monkeypatch, value: str | Non
     assert wake.wanted() == wanted
 
 
-async def test_a_wake_asks_for_a_turn_in_the_named_thread(app_server: FakeAppServer) -> None:
-    """The whole exchange, against a real socket: identify, then ask for a turn. No `model`, `cwd` or
-    `approvalPolicy` -- `turn/start` requires neither, so Codex answers those from the thread's own configuration
-    rather than from our guess about it."""
+async def test_a_wake_joins_the_queue_of_the_named_thread(app_server: FakeAppServer) -> None:
+    """The whole exchange, against a real socket: identify, then join the queue.
+
+    `experimentalApi` is not decoration -- codex-cli 0.151.0 answers -32600 without it. Nothing here names a
+    `model`, `cwd` or `approvalPolicy` either, since the call requires none of them and Codex answers them from
+    the thread's own configuration rather than from our guess about it.
+    """
     assert await wake.wake("01THREAD", "mail arrived", url=app_server.url) is True
 
-    identify, started = app_server.requests
+    identify, queued = app_server.requests
     assert identify["method"] == "initialize"
     assert identify["params"]["clientInfo"]["name"] == "yaac"
-    assert started["method"] == "turn/start"
-    assert started["params"] == {"threadId": "01THREAD", "input": [{"type": "text", "text": "mail arrived"}]}
+    assert identify["params"]["capabilities"] == {"experimentalApi": True}
+    assert queued["method"] == "thread/queue/add"
+    assert queued["params"]["threadId"] == "01THREAD"
+    assert queued["params"]["input"] == [{"type": "text", "text": "mail arrived"}]
+    # Echoed back and read by nobody here, but the server refuses the call without it.
+    assert queued["params"]["clientUserMessageId"]
+
+
+async def test_a_server_without_a_queue_gets_a_turn_instead() -> None:
+    """Two doors to the same room, tried in the order of what they cost: the queue waits its place where
+    `turn/start` opens a second turn beside the one already running. Only a server too old for the queue is
+    knocked at twice."""
+    old = FakeAppServer(queueless=True)
+    await old.start()
+    try:
+        assert await wake.wake("01THREAD", "mail arrived", url=old.url) is True
+    finally:
+        await old.stop()
+
+    assert [request["method"] for request in old.requests] == ["initialize", "thread/queue/add", "turn/start"]
+    assert old.requests[-1]["params"] == {"threadId": "01THREAD", "input": [{"type": "text", "text": "mail arrived"}]}
 
 
 async def test_the_reply_is_found_past_whatever_the_server_says_first() -> None:
@@ -183,7 +215,7 @@ async def test_an_arrival_wakes_the_session_once(endpoint: str, monkeypatch, app
         await talker.resolve(None).send("second", name="ann")
         await asyncio.sleep(SETTLE)
 
-        turns = [r for r in app_server.requests if r.get("method") == "turn/start"]
+        turns = [r for r in app_server.requests if r.get("method") == "thread/queue/add"]
         assert len(turns) == 1
         text = turns[0]["params"]["input"][0]["text"]
         # It says who is speaking: an alarm that reads like the user talking is worse than no alarm.

@@ -8,6 +8,14 @@ So this is an alarm clock rather than a postman. It says that mail is waiting an
 reading, which is the division the notice socket already makes, for the same reason: what a session receives
 should be what it chose to collect.
 
+**It knocks with `thread/queue/add`, and only falls back to `turn/start`.** Measured against codex-cli 0.151.0:
+on an idle thread the queue drains at once and a whole turn runs, so it wakes exactly as `turn/start` does; on a
+thread that is already working it takes its place in line, where `turn/start` instead opens a second turn
+alongside the first. Waking a session that is busy is the case this exists for, so the door that waits is the
+right one. It costs two things -- `capabilities.experimentalApi` in `initialize`, without which the server
+answers `-32600`, and a `clientUserMessageId`, which it echoes back and nothing here reads. A server too old for
+it says `unknown variant 'thread/queue/add'`, and that is what the fallback is for.
+
 **The door is a WebSocket the user opens on purpose.** `codex app-server --listen ws://127.0.0.1:4500` serves the
 thread protocol over a local socket, and `YAAC_WAKE` is that URL. There is nothing to discover and nothing to
 guess: no daemon to find, no control socket, no relay, and no subprocess -- which also means no dependence on an
@@ -26,6 +34,7 @@ import json
 import logging
 import os
 import struct
+import uuid
 from typing import Any
 from urllib.parse import urlparse
 
@@ -90,10 +99,36 @@ async def _answer(reader: asyncio.StreamReader, request_id: int) -> dict[str, An
             return message
 
 
-async def wake(thread: str, text: str, url: str | None = None, timeout: float = TIMEOUT_SECONDS) -> bool:
-    """Start a turn in `thread` with `text` as its input. True when the app-server accepted it.
+def _queue(request_id: int, thread: str, text: str) -> dict[str, Any]:
+    """Put the alarm at the back of the thread's queue. Drains at once when the thread is idle, waits when it is
+    not. `clientUserMessageId` is echoed back and read by nobody here; the server refuses the call without it."""
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "thread/queue/add",
+        "params": {
+            "threadId": thread,
+            "input": [{"type": "text", "text": text}],
+            "clientUserMessageId": str(uuid.uuid4()),
+        },
+    }
 
-    Every failure is quiet and false: nothing listening on that URL, no such thread, a turn already in flight. The
+
+def _turn(request_id: int, thread: str, text: str) -> dict[str, Any]:
+    """The older door, for a server that has no queue. It names no `model`, `cwd` or `approvalPolicy`, since
+    `turn/start` requires neither -- Codex answers those from the thread's own configuration."""
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "turn/start",
+        "params": {"threadId": thread, "input": [{"type": "text", "text": text}]},
+    }
+
+
+async def wake(thread: str, text: str, url: str | None = None, timeout: float = TIMEOUT_SECONDS) -> bool:
+    """Put `text` in front of `thread` as if the user had typed it. True when the app-server accepted it.
+
+    Every failure is quiet and false: nothing listening on that URL, no such thread, a server that refuses. The
     mail is in the inbox either way, and a session that cannot be woken is exactly a session that reads its mail
     the next time it does something.
     """
@@ -128,29 +163,29 @@ async def wake(thread: str, text: str, url: str | None = None, timeout: float = 
                         "jsonrpc": "2.0",
                         "id": 1,
                         "method": "initialize",
-                        "params": {"clientInfo": {"name": "yaac", "title": "YAAC", "version": "0"}},
+                        "params": {
+                            "clientInfo": {"name": "yaac", "title": "YAAC", "version": "0"},
+                            "capabilities": {"experimentalApi": True},
+                        },
                     }
                 )
             )
         )
-        writer.write(
-            _frame(
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "method": "turn/start",
-                        "params": {"threadId": thread, "input": [{"type": "text", "text": text}]},
-                    }
-                )
-            )
-        )
+        writer.write(_frame(json.dumps(_queue(2, thread, text))))
         await writer.drain()
 
         if await asyncio.wait_for(_answer(reader, 1), timeout=timeout) is None:
             logger.info("%s never finished the handshake; leaving %s asleep", endpoint, thread)
             return False
-        started = await asyncio.wait_for(_answer(reader, 2), timeout=timeout)
+        knocked = await asyncio.wait_for(_answer(reader, 2), timeout=timeout)
+
+        # An older app-server does not know the queue at all. Its answer names the method it could not parse,
+        # which is the only thing separating "too old" from "no such thread" -- both arrive as -32600.
+        if knocked is not None and "thread/queue/add" in str(knocked.get("error", "")):
+            logger.info("%s is too old for the queue; starting a turn in %s instead", endpoint, thread)
+            writer.write(_frame(json.dumps(_turn(3, thread, text))))
+            await writer.drain()
+            knocked = await asyncio.wait_for(_answer(reader, 3), timeout=timeout)
     except (OSError, TimeoutError, asyncio.IncompleteReadError) as exc:
         logger.info("could not wake %s through %s: %s", thread, endpoint, exc)
         return False
@@ -158,9 +193,9 @@ async def wake(thread: str, text: str, url: str | None = None, timeout: float = 
         with contextlib.suppress(OSError):
             writer.close()
 
-    if started is None:
+    if knocked is None:
         return False
-    if error := started.get("error"):
+    if error := knocked.get("error"):
         logger.info("the app-server refused to wake %s: %s", thread, error)
         return False
-    return "result" in started
+    return "result" in knocked
