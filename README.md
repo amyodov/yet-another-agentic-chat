@@ -272,7 +272,7 @@ waiting at its prompt. Codex can be reached there through its **app-server**,
 which is experimental and off by default — so this needs two things, not one:
 
 ```bash
-codex app-server daemon start          # the session must run under this daemon
+codex remote-control start             # the session must run under this daemon
 ```
 
 ```toml
@@ -285,14 +285,18 @@ programmatic equivalent of you typing — the model reads its history, hooks fir
 and `check_inbox()` does the rest. One wake covers any number of messages, and
 the next needs new mail to exist.
 
-**This is the one mechanism here that has not been watched working.** It is built
-and shipped, but on the machine it was developed on, `codex app-server proxy`
-accepted a connection and answered nothing — to `initialize` or `thread/list`,
-with either line-delimited or `Content-Length` framing, before and after
-`enable-remote-control`. Something is missing and it is probably small. Until it
-is found: the feature is off unless you set the variable, every failure is
-silent, and your mail waits in the inbox exactly as it would have anyway. A
-session that is not under the daemon has no thread to wake, and nothing happens.
+**This is the one mechanism here that has not been watched working**, and the
+door it knocks on may be the wrong one. On the machine it was developed on,
+`codex app-server proxy` accepted a connection and answered nothing — to
+`initialize` or `thread/list`, either framing, with remote control on and off.
+Meanwhile the daemon itself runs as `codex app-server --remote-control` and holds
+an outbound TLS connection to a relay, which suggests the thread protocol travels
+there rather than over the local control socket that `proxy` reaches.
+
+Until that is settled the feature is off unless you set the variable, every
+failure is silent, and your mail waits in the inbox exactly as it would have
+anyway. A session that is not under the daemon has no thread to wake, and nothing
+happens.
 
 
 **Both clients:** `join_channel()` now returns a `peer_uid` and a `peer_secret`.
