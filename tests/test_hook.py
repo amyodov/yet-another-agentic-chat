@@ -239,7 +239,8 @@ def test_the_out_of_process_hook_says_it_once(monkeypatch, payload: dict[str, An
     would find the same mail on the continuation it caused. Measured before this guard existed: the session
     continued itself until it was killed. `stop_hook_active` is what Codex sets to break exactly that."""
     waiting = {"connections": [{"channel": "forum", "name": "ann", "unread": 2}]}
-    monkeypatch.setattr(yaac_hook, "ask", lambda key: {"session": key, **waiting})
+    # The hook tells the socket which Codex thread it is while asking what is waiting, so the stub takes it too.
+    monkeypatch.setattr(yaac_hook, "ask", lambda key, thread=None: {"session": key, "thread": thread, **waiting})
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(sys, "argv", ["yaac-hook", "--key", "a-session"])
     yaac_hook.main()
