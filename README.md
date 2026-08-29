@@ -294,8 +294,9 @@ bounce in the sender's inbox rather than silence.
 rendezvous point relays all traffic, in every channel, in clear text — and that
 is an ordinary session that happened to get there first. A channel isolates
 participants at the transport level, so you never receive another channel's
-messages; but the relaying session sees everything. On one machine under one
-user account this is fine. Do not treat it as more than it is.
+messages; but the relaying session sees everything — the hat is Eve by
+construction, not by accident. On one machine under one user account this is
+fine. Do not treat it as more than it is.
 
 **Messages become context in the receiving session.** Whatever another
 participant sends is read by your agent as text it may act on — "hold your

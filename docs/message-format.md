@@ -20,7 +20,7 @@ After it the header follows in a **fixed order**, with `body` always last, so
 get:
 
 ```json
-{"yaac":1,"id":"01JZ…","ts":"2026-07-29T14:32:05Z","channel":"z combinator forum","from":{"name":"Диман","zmq_routing_id":"01JZ…"},"to":{"name":"Колян","zmq_routing_id":"01JZ…"},"body":"schema changed:\n  - renamed to recipient_group"}
+{"yaac":1,"id":"01JZ…","ts":"2026-07-29T14:32:05Z","channel":"z combinator forum","from":{"name":"Alice","zmq_routing_id":"01JZ…"},"to":{"name":"Bob","zmq_routing_id":"01JZ…"},"body":"schema changed:\n  - renamed to recipient_group"}
 ```
 
 | Field | Type | Meaning |
@@ -44,6 +44,11 @@ identified more than one way:
 ```json
 {"name": "Колян", "zmq_routing_id": "01JZ…"}
 ```
+
+That name is not decoration. A name is raw UTF-8 chosen by a user and never
+parsed, split, or case-folded by anything here, which is exactly why routing uses
+a separate opaque id: `ROUTING_ID` has length and byte constraints that a name
+must not inherit.
 
 - `name` — what the user chose. Unique on a channel only while its holder is
   connected, and reusable afterwards.

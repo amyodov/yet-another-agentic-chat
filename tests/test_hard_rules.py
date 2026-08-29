@@ -15,6 +15,9 @@ from typing import Any
 
 import pytest
 
+from yaac import frontend
+from yaac.backend import ConnectionRefused
+
 REPO = Path(__file__).resolve().parent.parent
 SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
 
@@ -344,6 +347,49 @@ async def test_a_server_whose_client_left_lets_go_of_the_port(endpoint: str, joi
         # departed hat had open leave sockets in TIME_WAIT, and those must not stand in the way.
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(("127.0.0.1", port))  # raises if the endpoint is still held
+
+
+@pytest.mark.parametrize(
+    "call,expected",
+    [
+        (lambda: frontend.join_channel(None, "forum", ""), "name is empty"),
+        (lambda: frontend.send("hello", name=""), "recipient name is empty"),
+    ],
+    ids=["join", "send"],
+)
+async def test_the_tool_boundary_refuses_a_name_nothing_filled_in(call, expected: str) -> None:
+    """The one check a name ever gets, and it lives here rather than on the wire: rule 4 keeps the hat and the
+    protocol out of names entirely, and only this layer knows a human was meant to supply the value. A completely
+    empty name is what an unexpanded template looks like -- and on `send` it would be worse than useless, since
+    omitting the name is how you address everyone, so an unfilled one would broadcast what was meant for one peer.
+
+    Refused as a result the model can act on, not an exception: the caller's next move is to ask its user.
+    """
+    answer = await call()
+    assert answer["error"] == expected
+    assert "next_step" in answer  # a refusal that does not say what to do next is a dead end
+
+
+@pytest.mark.parametrize("name", ["   ", "\t", "a", "  Bob  "])
+async def test_a_name_that_is_not_empty_reaches_the_backend_untouched(monkeypatch, name: str) -> None:
+    """Only *completely* empty is refused. Whitespace is a name a user may have chosen, and trimming it to find out
+    would be parsing, which rule 4 forbids -- so what the tool passes down must be what it was given, byte for byte.
+
+    The backend is a stub that records and refuses: this asserts what crossed the boundary, and touches no network.
+    """
+    passed: list[str] = []
+
+    class Recording:
+        memberships = {"already": object()}  # so the tool-list notification path is not taken
+
+        async def connect(self, channel: str, name: str):
+            passed.append(name)
+            raise ConnectionRefused("recorded")
+
+    monkeypatch.setattr(frontend, "radio", Recording)
+    answer = await frontend.join_channel(None, "forum", name)
+    assert passed == [name]
+    assert answer["error"] == "recorded"
 
 
 def test_no_python_file_reads_or_writes_text_without_naming_the_encoding() -> None:

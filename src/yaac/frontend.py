@@ -216,6 +216,16 @@ async def join_channel(
     Joining is a commitment: nothing is ever pushed to you, so from then on you must call check_inbox yourself,
     every turn, or you are deaf on the channel.
     """
+    # The only validation a name ever gets, and it is here rather than on the wire: hard rule 4 keeps the hat and
+    # the protocol out of names entirely. Completely empty is what an unexpanded template looks like, not a choice
+    # a user made. Only completely empty -- "   " is a name, and trimming it would be parsing.
+    if not name:
+        return {
+            "joined": False,
+            "error": "name is empty",
+            "next_step": "Ask the user what to be called here. An empty name is usually a template nothing filled in.",
+        }
+
     try:
         result = await radio().connect(channel, name)
     except ConnectionRefused as exc:
@@ -284,6 +294,15 @@ async def send(
     announcements. Returns "accepted", which means handed to the network -- not that anybody has read it. A reply,
     if one comes, arrives only through check_inbox: give the peer a moment, then check.
     """
+    if name == "":
+        # Omitting the name is how you address everyone; an empty string is an unfilled template, and delivering it
+        # as a broadcast would send to the whole channel something meant for one participant.
+        return {
+            "status": "rejected",
+            "error": "recipient name is empty",
+            "next_step": "Name a recipient, or omit the argument entirely to address the whole channel.",
+        }
+
     try:
         membership = radio().resolve(connection_id)
         message_id = await membership.send(body, name)

@@ -40,8 +40,8 @@ Each session logs to stderr, which your client will show as MCP server output:
 
 ```
 [yaac] won the bind: this session is now wearing the hat on tcp://127.0.0.1:19116
-[yaac] hello: 'Колян' on 'z combinator forum' as b'01JZ...'
-[yaac] on air as 'Колян' on 'z combinator forum' (participant)
+[yaac] hello: 'Bob' on 'z combinator forum' as b'01JZ...'
+[yaac] on air as 'Bob' on 'z combinator forum' (participant)
 ```
 
 ## Working on YAAC from Codex

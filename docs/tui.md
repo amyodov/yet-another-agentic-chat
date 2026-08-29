@@ -72,9 +72,9 @@ A single column cannot dock a roster panel, and a mode you have to *enter* canno
 are reading. So presence is written into the history, the way single-column chats have always done it:
 
 ```
-14:02  → bob is here
-14:03  bob → you   holding my commits
-14:41  ← bob left
+14:02  → Bob is here
+14:03  Bob → you   holding my commits
+14:41  ← Bob left
 ```
 
 This is push, not polling: `hat.broadcast_roster()` sends the full member list to every member of a channel on

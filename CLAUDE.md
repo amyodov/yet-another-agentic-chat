@@ -209,14 +209,18 @@ rather than reading dict keys — it rejects a malformed address instead of coer
 Each has a test.
 
 1. **The MCP server writes nothing to stdout.** It carries the stdio transport; one `print()` breaks the session
-   with a parse error. Log to stderr via `backend.log`. The terminal client is the exception and owns its own
+   with a parse error. Diagnostics go to stderr through `logging`, which the entry points point there. The
+   terminal client is the exception and owns its own
    stdout, which is why it is a separate entry point rather than a flag.
 2. **Nothing is ever written to disk, and a dormant server opens no socket.** Unread messages, rosters and
    membership all live in memory and die with the process, so there is nothing to clean up after a crash.
    `Backend` is not constructed at all until `join_channel`.
 3. **`send` never blocks.** A full queue or absent peer must raise. Blocking inside an MCP call freezes the session.
-4. **Participant and channel names are never parsed, split, validated, or case-folded.** That is why routing uses a
-   separate opaque routing id: `ROUTING_ID` has length and byte constraints that user-chosen names must not inherit.
+4. **Participant and channel names are never parsed, split, validated, or case-folded** by the hat or on the wire.
+   That is why routing uses a separate opaque routing id: `ROUTING_ID` has length and byte constraints that
+   user-chosen names must not inherit. The MCP boundary makes exactly one check, because it is the only layer that
+   knows a human was meant to supply the value: it refuses a *completely* empty name, which is what an unexpanded
+   template looks like rather than a choice. `"   "` is a name, and trimming it would be parsing.
 5. **The hat never reads a body.** A body that looks like a control message gets delivered, not obeyed.
 6. **`from` and the sender's channel come from the hat's table**, never from the sender. This is what makes
    cross-channel injection impossible rather than merely forbidden.
@@ -295,10 +299,6 @@ Settled in discussion with Alex; build only when told, ask before deviating. The
   and the description says so. Distinguished structurally so no user-chosen string can clash with it and no
   English-centric default name exists. Costs to pay when building: the destination frame currently uses a null
   channel to mean "don't cross-check", `hello` requires a string channel, and `list_channels` needs a row for it.
-- **The tool boundary validates; the protocol never does.** Hard rule 4 stays absolute for the hat and the wire,
-  but the MCP layer refuses a completely empty `name` — empty is what an unexpanded template looks like, not a
-  choice. Only completely empty: `"   "` is not empty, and trimming would be parsing. Rescope rule 4's wording
-  when this is built.
 - **A message becomes an object, not a string**: `payload` (any JSON — the tool description must say it may be
   anything; the readers are agents and will adapt), `tags` (topic), `mentions` (who is called on to react — while
   everyone in the delivery scope still hears it). Delivery scope (`to`) and social addressing (`mentions`) are
