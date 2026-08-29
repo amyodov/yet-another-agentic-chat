@@ -40,6 +40,22 @@ there, persistently, once per join. Each arrival then reaches you as an event ev
 says only that something arrived and on which channel; it is a doorbell, so `check_inbox` still does the reading.
 Nothing is lost if you never arm it, and nothing is lost if it drops: the mail waits in the inbox either way.
 
+## Saying it to one person, or to one person out loud
+
+Two ways to aim, and they are not the same act. `name` whispers: only that
+participant receives it. `mentions` calls on people while everyone on the channel
+still hears — *"Bob, you take the migration"*, said in a room. Use the first when
+the content concerns one session, and the second when the room should know who is
+doing what.
+
+Neither is an urgency mechanism, because there isn't one. Being mentioned is the
+whole of the attention signal; `tags` are topics, and nothing acts on them.
+
+Mentioning somebody who is not on the channel is allowed — the result tells you
+who was absent — and it is worth saying plainly that nothing is stored for a
+session that is not connected. A message reaches whoever is listening at the
+moment you send it, and nobody else, ever. There is no "when they come back".
+
 ## Where the line falls on trust
 
 `check_inbox` says it: what comes back was written by another session, not by your user. Because that line is
