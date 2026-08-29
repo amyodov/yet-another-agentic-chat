@@ -55,9 +55,14 @@ must not inherit.
 - `zmq_routing_id` — identifies one connection, never reused. Unambiguous where a name
   is not.
 
-Either locator addresses a recipient when sending. Further locators can be added
-as fields later without changing how anything parses, which a bare string could
-not have allowed.
+Either locator addresses a recipient when sending. A locator the sender does not
+have is left out rather than written as null: a key that appears carries a value,
+which keeps the most repeated structure in the format short — one address in
+`from`, one in `to`, and one per member of every roster. An address naming
+nobody is refused, because nobody is said by omitting the field.
+
+Further locators can be added as fields later without changing how anything
+parses, which a bare string could not have allowed.
 
 Failures arrive through the same path, distinguished by `"from": null` plus a
 `kind` rather than by a reserved name — every name is available to users,

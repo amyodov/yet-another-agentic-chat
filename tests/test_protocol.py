@@ -257,20 +257,24 @@ def test_an_envelope_serializes_to_one_line_whatever_the_body_contains() -> None
         ({"name": "ann", "zmq_routing_id": "01A"}, Address("ann", "01A")),
         ({"name": "ann"}, Address("ann", None)),
         ({"zmq_routing_id": "01A"}, Address(None, "01A")),
-        ({}, Address(None, None)),
     ],
-    ids=["null", "both", "name-only", "routing_id-only", "empty"],
+    ids=["null", "both", "name-only", "routing_id-only"],
 )
 def test_addresses_accept_either_locator(value: Any, expected: Any) -> None:
     assert Address.from_wire(value) == expected
+    if expected is not None:
+        # What it does not have, it does not write: the shorter wire, and the same rule scopes follow.
+        assert expected.to_wire() == value
 
 
 @pytest.mark.parametrize(
     "value",
-    ["a bare string", 42, ["list"], {"name": 42}, {"zmq_routing_id": []}],
-    ids=["string", "number", "list", "bad-name", "bad-routing_id"],
+    ["a bare string", 42, ["list"], {"name": 42}, {"zmq_routing_id": []}, {}, {"name": None}],
+    ids=["string", "number", "list", "bad-name", "bad-routing_id", "nobody", "null-locator"],
 )
 def test_a_malformed_address_is_rejected_rather_than_coerced(value: Any) -> None:
+    """`{}` and a null locator are refused for the reason a null scope field is: nobody is said by leaving the
+    field out, and an address that names nobody is a message addressed to nowhere."""
     with pytest.raises(ValueError):
         Address.from_wire(value)
 
@@ -283,10 +287,10 @@ def test_a_malformed_address_is_rejected_rather_than_coerced(value: Any) -> None
     [
         (Scope(), {}),
         (Scope(channel="forum"), {"channel": "forum"}),
-        (Scope(peer=Address("Bob")), {"peer": {"name": "Bob", "zmq_routing_id": None}}),
+        (Scope(peer=Address("Bob")), {"peer": {"name": "Bob"}}),
         (
             Scope(channel="forum", peer=Address("Bob")),
-            {"channel": "forum", "peer": {"name": "Bob", "zmq_routing_id": None}},
+            {"channel": "forum", "peer": {"name": "Bob"}},
         ),
     ],
     ids=["hat", "channel", "peer", "channel-and-peer"],

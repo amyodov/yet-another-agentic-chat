@@ -157,21 +157,42 @@ class Address:
     routing_id: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
-        # The routing id is named explicitly on the wire: it is a ZMQ transport address, and anything reading this
-        # should see that rather than guess what "routing_id" refers to.
-        return {"name": self.name, "zmq_routing_id": self.routing_id}
+        """Only the locators this address actually has.
+
+        A locator it does not know is omitted rather than written as null, which is the same rule scopes follow:
+        a key that appears carries a value. It is also the shorter wire, and addresses are the most repeated
+        structure in the format -- one in `from`, one in `to`, one per member of every roster.
+
+        The routing id is named explicitly: it is a ZMQ transport address, and anything reading this should see
+        that rather than guess what "routing_id" refers to.
+        """
+        wire: dict[str, Any] = {}
+        if self.name is not None:
+            wire["name"] = self.name
+        if self.routing_id is not None:
+            wire["zmq_routing_id"] = self.routing_id
+        return wire
 
     @classmethod
     def from_wire(cls, value: Any) -> Address | None:
-        """Parse an address field. Returns None for a missing or null one, which means "everybody"."""
+        """Parse an address field. Returns None for a missing or null one, which means "everybody".
+
+        Nobody is said by leaving the field out, so an address that names nobody -- `{}`, or a locator written as
+        null -- is refused rather than read as an address to nowhere.
+        """
         if value is None:
             return None
         if not isinstance(value, dict):
             raise ValueError(f"an address must be an object or null, got {type(value).__name__}")
+        for field_name in ("name", "zmq_routing_id"):
+            if field_name in value and value[field_name] is None:
+                raise ValueError(f"address {field_name} is null; omit a locator you do not have")
         name, routing_id = value.get("name"), value.get("zmq_routing_id")
         for field_name, item in (("name", name), ("zmq_routing_id", routing_id)):
             if item is not None and not isinstance(item, str):
-                raise ValueError(f"address {field_name} must be a string or null")
+                raise ValueError(f"address {field_name} must be a string")
+        if name is None and routing_id is None:
+            raise ValueError("an address names at least one locator; nobody is said by omitting the field")
         return cls(name=name, routing_id=routing_id)
 
 
