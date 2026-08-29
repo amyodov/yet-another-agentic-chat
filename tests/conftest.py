@@ -22,6 +22,11 @@ def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> M
     pytest-asyncio's (>= 1.4) replacement for the loop-policy fixtures, which stand on the API 3.14 deprecates.
 
     Defining the hook obliges it: returning None for any item is a UsageError, hence the explicit default branch.
+
+    The split has a sharp edge worth naming: **a test that holds an in-process Backend must not live in
+    test_hard_rules**, because on Windows that module gets the proactor loop and pyzmq cannot work there. It does
+    not fail quickly either -- one such test hung the Windows job for fifty minutes before it was noticed, while
+    macOS and Linux stayed green. Drive a subprocess there, or hold a Backend elsewhere; not both.
     """
     match sys.platform, item.path.stem:
         case "win32", "test_hard_rules":

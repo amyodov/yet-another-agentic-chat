@@ -2,9 +2,11 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 import pytest
 
+from yaac import frontend
 from yaac.backend import AmbiguousConnection, Backend, ConnectionRefused, NotConnected
 from yaac.protocol import Envelope
 
@@ -380,3 +382,45 @@ async def test_every_membership_gets_its_own_pair(radios: RadioFactory) -> None:
     there = await backend.connect(OTHER, "ann")
     assert here.peer_uid != there.peer_uid
     assert here.peer_secret != there.peer_secret
+
+
+# Peer secrets at the tool boundary --------------------------------------
+
+
+@pytest.mark.parametrize("tool", ["send", "check_inbox", "peers"])
+async def test_acting_as_a_peer_needs_that_peer_s_secret(endpoint: str, monkeypatch, tool: str) -> None:
+    """`join_channel` hands back a pair, and the three tools that act *as* that participant want the secret back.
+
+    It lives here rather than with the other tool-boundary rules because it holds a real `Backend`, and on Windows
+    the module that drives subprocesses runs on the proactor loop, where pyzmq cannot work at all -- which is
+    exactly what `conftest.py` splits the loops for. Putting it there hung the Windows job for fifty minutes.
+
+    It buys no boundary the operating system lacks -- everything runs under one user account, and the secret sits
+    in the transcript -- which is exactly why it is called an honour-system convention. What it prevents is the
+    accident: one conversation reaching into another's connection in a client that runs a single server for the
+    whole application, where connection ids are visible in every result.
+    """
+    backend = Backend(endpoint)
+    monkeypatch.setattr(frontend, "_radio", backend)
+    try:
+        joined = await frontend.join_channel(None, "forum", "ann")
+        assert len(joined["peer_uid"]) == 26
+        assert len(joined["peer_secret"]) == 26
+        assert joined["peer_secret"] != joined["peer_uid"]
+
+        arguments: dict[str, Any] = {"connection_id": joined["connection_id"]}
+        if tool == "send":
+            arguments["body"] = "hi"
+        call = getattr(frontend, tool)
+
+        refused = await call(**arguments)
+        assert "peer_secret" in refused["error"]
+        assert "next_step" in refused  # a refusal that does not say what to do next is a dead end
+
+        allowed = await call(**arguments, peer_secret=joined["peer_secret"])
+        assert "error" not in allowed
+    finally:
+        await backend.disconnect_all()
+        backend.close()
+
+
