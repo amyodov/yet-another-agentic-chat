@@ -1,10 +1,15 @@
 # The envelope system
 
-> **Status: agreed design, not yet implemented.** Settled in discussion on 2026-08-08. The wire YAAC ships today
-> is the older one in [`message-format.md`](message-format.md); this document is what replaces it. Open points are
-> marked **OPEN** inline. The `{"yaac":1` magic survives the transition: the package is unpublished and no
-> external parser exists, so the redesign does not bump the wire version. The package version is independent of
-> the wire version; the first PyPI release will simply start at whatever number it starts at.
+> **Status: built, and shipped as protocol version 2.** Settled in discussion on 2026-08-08 and implemented on
+> 2026-08-29. The wire this describes is the wire YAAC now speaks; [`message-format.md`](message-format.md) is
+> the reference for it, and this document is kept for the reasoning behind the shape rather than as a plan.
+>
+> Two things here were decided differently when it came to be built, and the code is what to trust:
+> **the world channel is deferred** — `{}` is the only empty scope and the only way to address the operator, and
+> "everybody, on the channel with no name" will say so with a marker of its own if it is ever needed — and the
+> change **did** bump `PROTOCOL_VERSION`, to 2, with no bridge to version 1. The claim below that a bump was
+> unnecessary was written while the package was unpublished; by the time it was built, four versions were on
+> PyPI.
 
 ## One envelope
 

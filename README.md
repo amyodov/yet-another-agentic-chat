@@ -265,6 +265,20 @@ Codex reviews a hook before it runs it — approve it with `/hooks`. From then o
 a session is told when mail is waiting and reads it with `check_inbox()` itself.
 Give each Codex session its own `YAAC_SESSION` if you run several at once.
 
+Setting `YAAC_WAKE=1` in the same `env` block additionally lets a Codex session
+be *woken* while it sits idle, through its app-server. This is the one thing
+here that has not been watched working: it is off unless you set it, every
+failure is silent, and your mail waits in the inbox exactly as it would have
+anyway.
+
+**Both clients:** `join_channel()` now returns a `peer_uid` and a `peer_secret`.
+`send()`, `peers()` and `check_inbox()` want the secret back — it keeps one
+conversation from reaching into another's connection in a client that runs a
+single server for the whole application, and it is an honour-system convention
+rather than a boundary, since everything here runs under one user account.
+Joining again with the same pair comes back as the same participant, which is how
+a session reclaims its name after a restart.
+
 Nothing here is required, and nothing writes to disk: the two halves find each
 other on a loopback port derived from the name they share.
 
@@ -367,9 +381,16 @@ the choices, and `dev_connections()` lists them on demand.
 - A tool list that grows when you connect and shrinks when you leave — and, on a
   client that would never re-read it, is complete from the start instead
 - Direct messages and channel broadcasts, with the two distinguishable on arrival
+- Mentions: a broadcast everyone hears that calls on one person by name, which is
+  a different thing from whispering to them
+- Tags and a JSON payload beside the text, for messages that are more than a
+  sentence
+- A peer identity that survives a restart, so a session that comes back reclaims
+  the name it had rather than being told it is taken
 - Channel creation reported, so a mistyped channel name is caught immediately
 - Bounces for messages that could not be delivered
-- Nickname collisions refused, except when the holder's session is gone
+- Nickname collisions refused, except when the holder's session is gone, or when
+  the holder is you coming back
 - Automatic takeover when the relaying session disappears, in a few seconds, with
   no user action and no configuration
 - `list_channels` from a session that has not joined anything, with no side effects

@@ -197,11 +197,17 @@ Received frames go through `protocol.parse`, never `loads` — it rejects a `yaa
 build's version, checking the parsed value rather than the leading bytes, since that is what the format guarantees.
 `type(version) is not int` because `1.0` and `True` both equal `1`. Do not call `json.dumps` on anything that goes on the wire. `frontend.hook_report` is the one other caller, and it is answering Claude Code's hook contract rather than writing a YAAC message -- `protocol.dumps` would stamp `yaac: 1` into somebody else's format.
 
-`from` and `to` are `Address` objects, not strings: `{name, zmq_routing_id}`, either nullable. A name is unique on a
-channel only while its holder is connected; a routing id identifies one connection and is never reused. Further
-locators can be added as fields without breaking parsers, which is why this is a structure.
+`from` and `to` are `Scope` objects whose fields compose — `{channel}`, `{peer}`, `{channel, peer}`, and `{}` for
+the hat, which is the only mail it reads. A `peer` is an `Address`: `{name, zmq_routing_id}`, either locator
+optional and the one you do not have simply left out. A name is unique on a channel only while its holder is
+connected; a routing id identifies one connection and is never reused. Further locators can be added as fields
+without breaking parsers, which is why these are structures.
 
-`Address`, `Destination` and `Envelope` are frozen dataclasses with `to_wire`/`from_wire`. Parse with `from_wire`
+One concept, one encoding: `null` and `{"channel": null}` are refused rather than read as the hat, and an address
+naming nobody is refused rather than read as an address to nowhere. Unknown fields are ignored, because refusing
+those would make every locator added later a breaking change.
+
+`Address`, `Scope` and `Envelope` are frozen dataclasses with `to_wire`/`from_wire`. Parse with `from_wire`
 rather than reading dict keys — it rejects a malformed address instead of coercing it.
 
 ## Hard rules
@@ -282,67 +288,17 @@ These rules cover everything written in words: comments, docstrings, commit mess
 
 ## Decided, not built
 
-Settled in discussion with Alex; build only when told, ask before deviating. The envelope system is formalized in
-`docs/zmq.md` — that file is the spec, this section tracks the decisions and their open edges.
+Settled in discussion with Alex; build only when told, ask before deviating.
 
 - **Privacy is convention, not protection.** Everything runs on one machine under one user account, where any
   session can already read another's transcript from disk, so YAAC cannot add a boundary the OS does not have.
   Identity mechanisms exist to prevent accidents and default misuse by well-behaved participants — never to stop a
   determined session, and they must not claim otherwise.
-- **`peer_secret` gates `send` and `peers`, not only inbox reads.** Every call that acts as the peer carries it;
-  the pair is returned by `join_channel` and presenting it again resumes the same peer after a client restart.
-  It buys no boundary the OS lacks — that is the point of the honour-system framing — but it makes acting as
-  somebody else a deliberate act rather than an accident, which is the whole claim.
-- **`join_channel` will return a `peer_uid` + `peer_secret` pair.** The secret is an honor-system convention, not
-  cryptography: a participant that did not receive it through the proper flow is not that peer. The backend verifies
-  it locally against its own memberships; the hat cannot verify anything, since its state is rebuilt from `hello`
-  after every changeover. Presenting the pair on join resumes the same peer after a client restart. Still open:
-  whether the secret gates `send` and `peers` or only inbox reads, and whether `peer_uid` becomes a locator inside
-  `from`/`to`.
-- **The world channel is `None`, not a name — and is deferred, not cancelled.** It is a real scope, distinct from
-  the hat: `to: {}` is the operator, one recipient, mail the hat interprets; `to: {channel: null}` is everybody,
-  mail the hat relays. Its only unique capability is reaching a session that joined nothing, which is worth having
-  only if membership is automatic — and automatic membership means every session on the machine hears every shout.
-  Neither trade is worth taking before something needs it. The serializer's null-vs-absent discipline ships anyway,
-  since `from: {}` needs it, so adding this later is an addition rather than a wire change. Costs recorded at the
-  time: the destination frame currently uses a null channel to mean "don't cross-check", `hello` requires a string
-  channel, and `list_channels` needs a row for a channel with no name to print.
-- **A message becomes an object, not a string**: `payload` (any JSON — the tool description must say it may be
-  anything; the readers are agents and will adapt), `tags` (topic), `mentions` (who is called on to react — while
-  everyone in the delivery scope still hears it). Delivery scope (`to`) and social addressing (`mentions`) are
-  separate things: a whisper stays private-scope, and mentioning someone on the open channel is heard by all, like
-  radio. There is no urgency mechanism; being mentioned is the attention signal, and any loudness convention is a
-  tag. At the tool boundary `body` stays as it is, and `payload` is optional beside it: most messages are a
-  sentence, and routing every plain send through a field described as "anything" would make models quote strings
-  inconsistently for no gain.
-- **`from` and `to` are scope objects** whose fields compose: `{channel}` broadcasts to it, `{peer}` whispers,
-  `{channel, peer}` is that peer as a member of that channel, and `to: {}` — no scope at all — addresses whoever
-  wears the hat, for technical asks; symmetrically `from: {}` marks infrastructure messages such as bounces
-  (today `from: null`). Senders never transmit `from` at all — the hat stamps it from its table (rule 6), so
-  `from: {}` is unforgeable by construction, not by validation.
-
-  **Null is not absent, and the serializer never drops it.** `{channel: null}` is the world channel — everybody —
-  and `{}` is the hat; a serializer that omitted null fields would turn a shout to the world into a private
-  question to the operator. The same distinction reads clearly on the other side too: `from: {channel: null}` is
-  somebody speaking on the world channel, `from: {}` is the hat itself. Tested in both directions, encode and
-  decode, since dropping a null is the kind of helpfulness a JSON library adds on its own.
-
-  **`mentions` and `tags` are envelope fields, not part of the message object.** They sit beside `from`/`to` where
-  the hat can read them, which leaves rule 5 intact — a body is what the hat never reads, and these are not body.
-  It matters for `mentions`: the hat can complete each address from its table the way it completes `from`, so a
-  recipient answers "am I mentioned?" by comparing routing ids rather than names, which is exact where a name is
-  ambiguous the moment it has been reused. `payload` stays opaque: the hat has no business in it and no reason to
-  decode it.
-- **One envelope for all wire traffic, control included.** `hello`, channel listing, `whois`, `roster`, bounces
-  and chat all travel as the same mail shape; the control/data split by frame count disappears. Rule 5 restates
-  as: the hat interprets exactly the mail addressed to `{}`, and nothing else — delivery versus obedience decided
-  by addressing, not frame layout. What the receiving backend does with operator mail (roster to cache, bounce to
-  inbox) is backend policy, not a second format. **This bumps `PROTOCOL_VERSION` to 2, and version 1 is abandoned
-  rather than bridged** — v1 was always temporary. Old and new peers then cannot talk at all, which `protocol.parse`
-  already enforces by refusing any version that is not this build's. The cost lands on a machine mid-upgrade: a new
-  session finds the endpoint held by an old hat and hears nothing, which is indistinguishable from an empty net
-  unless the refusal says which version it saw. It must say so — #29 is what the silent version of that failure
-  cost.
+- **Built on 2026-08-29:** the envelope system (one shape for every message,
+  scopes that compose, `mentions` and `tags` as envelope fields, `payload` beside `body`), and peer identity
+  (`peer_uid`, `peer_secret`, resume after a restart). `docs/message-format.md` is the reference; `docs/zmq.md`
+  keeps the reasoning. Version 2 does not bridge to version 1, and both sides name the version they saw, because
+  a mismatch otherwise reads as an empty net rather than as a disagreement.
 - **Docs examples use the classical cast** — Alice, Bob, Carol; the hat-sees-everything caveat is "the hat is Eve
   by construction". One side note keeps a non-ASCII name to show names are unrestricted.
 
