@@ -164,7 +164,7 @@ def main() -> None:
         # its repertoire comes back as the wrong name or raises. Reading the buffer is what keeps the rule that
         # names are never parsed, split or transformed anywhere they pass through.
         payload = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
-    except (ValueError, UnicodeDecodeError):
+    except ValueError, UnicodeDecodeError:
         payload = {}
 
     event = payload.get("hook_event_name") or "Stop"
