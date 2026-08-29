@@ -392,6 +392,90 @@ async def test_a_name_that_is_not_empty_reaches_the_backend_untouched(monkeypatc
     assert answer["error"] == "recorded"
 
 
+@pytest.mark.parametrize(
+    "mentions,accepted",
+    [(["Bob"], True), (["Bob", "Carol"], True), ([], True), ([""], False), ([42], False), (None, True)],
+    ids=["one", "several", "empty-list", "empty-name", "not-a-name", "omitted"],
+)
+async def test_mentions_are_checked_before_anything_is_queued(monkeypatch, mentions, accepted: bool) -> None:
+    """A malformed mention is refused where the model can read the reason, not sent for the hat to puzzle over.
+    An empty name is the unexpanded template again; an empty list is simply nobody, which is what omitting it
+    means, so both are accepted and neither is written to the wire."""
+    sent: list[tuple] = []
+
+    class Recording:
+        memberships = {"already": object()}
+
+        @staticmethod
+        def resolve(_):
+            class Membership:
+                name = "Alice"
+                routing_id = "01A"
+
+                @staticmethod
+                def peer_names():
+                    return ["Bob"]
+
+                @staticmethod
+                async def send(body, name=None, **kwargs):
+                    sent.append((body, name, kwargs))
+                    return "01M"
+
+                @staticmethod
+                def pending_count():
+                    return 0
+
+            return Membership()
+
+        @staticmethod
+        def describe_all():
+            return []
+
+    monkeypatch.setattr(frontend, "radio", Recording)
+    answer = await frontend.send("hi", mentions=mentions)
+    assert (answer["status"] == "accepted") is accepted
+    if accepted:
+        assert [m.name for m in sent[0][2]["mentions"]] == list(mentions or [])
+    else:
+        assert "next_step" in answer  # a refusal that does not say what to do next is a dead end
+
+
+async def test_a_mention_of_somebody_absent_is_carried_and_reported(monkeypatch) -> None:
+    """Not refused: a mention is social rather than delivery, and "Bob, if you are here" is a normal thing to
+    say. But nothing is stored for a session that is not connected, so the sender is told who was not listening."""
+    class Recording:
+        memberships = {"already": object()}
+
+        @staticmethod
+        def resolve(_):
+            class Membership:
+                name = "Alice"
+                routing_id = "01A"
+
+                @staticmethod
+                def peer_names():
+                    return ["Bob"]
+
+                @staticmethod
+                async def send(body, name=None, **kwargs):
+                    return "01M"
+
+                @staticmethod
+                def pending_count():
+                    return 0
+
+            return Membership()
+
+        @staticmethod
+        def describe_all():
+            return []
+
+    monkeypatch.setattr(frontend, "radio", Recording)
+    answer = await frontend.send("hi", mentions=["Bob", "Carol"])
+    assert answer["status"] == "accepted"
+    assert answer["mentioned_but_absent"] == ["Carol"]
+
+
 def test_no_python_file_reads_or_writes_text_without_naming_the_encoding() -> None:
     """Windows defaults to cp1252, not UTF-8, so reading a file without naming an encoding decodes bytes it cannot
     represent and dies -- which is how a README containing an em dash took a release-blocking CI run down. The

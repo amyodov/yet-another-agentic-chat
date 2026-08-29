@@ -46,7 +46,7 @@ from .backend import (
     configure_logging,
 )
 from .hook import envelope, silence
-from .protocol import Envelope
+from .protocol import Address, Envelope
 
 logger = logging.getLogger(__name__)
 
@@ -288,13 +288,26 @@ CONNECTION_ID = Annotated[
 async def send(
     body: Annotated[str, Field(description="The message text.")],
     name: Annotated[str | None, Field(description="Recipient's name. Omit only to announce to everyone.")] = None,
+    mentions: Annotated[
+        list[str] | None,
+        Field(description="Names this message calls on to react. Everyone in scope still receives it."),
+    ] = None,
+    tags: Annotated[list[str] | None, Field(description="Topic labels. Not priorities; nothing acts on them.")] = None,
+    payload: Annotated[
+        Any, Field(description="Any JSON to carry beside the text, when structure helps more than prose.")
+    ] = None,
     connection_id: CONNECTION_ID = None,
 ) -> dict[str, Any]:
     """Send a message to one participant, or to the whole channel if NAME is omitted.
 
     Prefer addressing one person: a broadcast interrupts every session on the channel, so reserve it for genuine
-    announcements. Returns "accepted", which means handed to the network -- not that anybody has read it. A reply,
-    if one comes, arrives only through check_inbox: give the peer a moment, then check.
+    announcements. MENTIONS is the other way to aim -- everyone still hears it, but the named ones are being
+    called on, like saying "Bob, you take this" out loud in a room. Mentioning somebody absent is allowed and
+    silently kept: nothing is stored for a session that is not connected, so a message reaches whoever is on the
+    channel at the moment you send it and nobody else, ever.
+
+    Returns "accepted", which means handed to the network -- not that anybody has read it. A reply, if one comes,
+    arrives only through check_inbox: give the peer a moment, then check.
     """
     if name == "":
         # Omitting the name is how you address everyone; an empty string is an unfilled template, and delivering it
@@ -305,14 +318,27 @@ async def send(
             "next_step": "Name a recipient, or omit the argument entirely to address the whole channel.",
         }
 
+    if mentions is not None and any(not isinstance(m, str) or m == "" for m in mentions):
+        return {
+            "status": "rejected",
+            "error": "mentions must be names",
+            "next_step": "Pass the names as you would to `name`, or leave mentions out entirely.",
+        }
+
     try:
         membership = radio().resolve(connection_id)
-        message_id = await membership.send(body, name)
+        message_id = await membership.send(
+            body,
+            name,
+            payload=payload,
+            mentions=tuple(Address(name=m) for m in mentions or ()),
+            tags=tuple(tags or ()),
+        )
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
     except RuntimeError as exc:
         return {"status": "rejected", "error": str(exc)}
-    return {
+    answer: dict[str, Any] = {
         "status": "accepted",
         "id": message_id,
         "from": membership.name,
@@ -320,6 +346,11 @@ async def send(
         "connection_id": membership.routing_id,
         **_unread(membership),
     }
+    if absent := [m for m in mentions or () if m not in membership.peer_names()]:
+        # Said, not refused. A mention is social rather than delivery, and "Bob, if you are here" is a normal
+        # thing to say -- but the sender should know nobody by that name is listening right now.
+        answer["mentioned_but_absent"] = absent
+    return answer
 
 
 async def check_inbox(

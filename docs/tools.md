@@ -92,8 +92,13 @@ List the names currently on your channel, besides your own.
 Send a message to one participant, or to the whole channel if NAME is omitted.
 
 Prefer addressing one person: a broadcast interrupts every session on the channel, so reserve it for genuine
-announcements. Returns "accepted", which means handed to the network -- not that anybody has read it. A reply,
-if one comes, arrives only through check_inbox: give the peer a moment, then check.
+announcements. MENTIONS is the other way to aim -- everyone still hears it, but the named ones are being
+called on, like saying "Bob, you take this" out loud in a room. Mentioning somebody absent is allowed and
+silently kept: nothing is stored for a session that is not connected, so a message reaches whoever is on the
+channel at the moment you send it and nobody else, ever.
+
+Returns "accepted", which means handed to the network -- not that anybody has read it. A reply, if one comes,
+arrives only through check_inbox: give the peer a moment, then check.
 
 *Not read-only; destructive -- what it does cannot be undone.*
 
@@ -101,4 +106,7 @@ if one comes, arrives only through check_inbox: give the peer a moment, then che
 | --- | --- | --- | --- |
 | `body` | string | yes | The message text. |
 | `name` | string | null | no | Recipient's name. Omit only to announce to everyone. |
+| `mentions` | array | null | no | Names this message calls on to react. Everyone in scope still receives it. |
+| `tags` | array | null | no | Topic labels. Not priorities; nothing acts on them. |
+| `payload` | object | no | Any JSON to carry beside the text, when structure helps more than prose. |
 | `connection_id` | string | null | no | Which connection to use. Omit unless this session holds more than one. |
