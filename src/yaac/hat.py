@@ -250,13 +250,13 @@ class Hat:
             and self.peer_uids.get(incumbent) == peer_uid
         )
         if returning:
-                # The same participant coming back on a new connection -- a client restarted, or a DEALER
-                # reconnected under a new routing id. Without this the name is held by a connection nobody is
-                # behind until a send to it happens to fail, and its owner is locked out of their own name.
-                # The uid is not a secret and proves nothing: it prevents the accident, not a determined session.
-                logger.info("peer %r returning on a new connection for %r", peer_uid, key)
-                self.evict(incumbent)
-                incumbent = None
+            # The same participant coming back on a new connection -- a client restarted, or a DEALER
+            # reconnected under a new routing id. Without this the name is held by a connection nobody is
+            # behind until a send to it happens to fail, and its owner is locked out of their own name.
+            # The uid is not a secret and proves nothing: it prevents the accident, not a determined session.
+            logger.info("peer %r returning on a new connection for %r", peer_uid, key)
+            self.evict(incumbent)
+            incumbent = None
         if incumbent is not None and incumbent != source:
             # The name is bound to a different routing_id. Refuse rather than reassign, because reassigning would
             # deliver messages intended for the incumbent to the newcomer. The exception is an incumbent that no

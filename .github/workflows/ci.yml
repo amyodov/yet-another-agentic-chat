@@ -21,4 +21,5 @@ jobs:
       # exercises on Windows is exactly the kind of thing this matrix exists to catch.
       - run: uv sync --frozen --all-extras
       - run: uv run ruff check .
+      - run: uv run ruff format --check .
       - run: uv run pytest -q

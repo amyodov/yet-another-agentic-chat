@@ -464,9 +464,7 @@ def whois(to: Scope) -> Envelope:
 
 def roster(channel: str, peers: list[Address], to: Scope) -> Envelope:
     """Current membership of a channel. Cached by the participant; never written to an inbox."""
-    return message(
-        to, frm=Scope(), op="roster", payload={"channel": channel, "members": [p.to_wire() for p in peers]}
-    )
+    return message(to, frm=Scope(), op="roster", payload={"channel": channel, "members": [p.to_wire() for p in peers]})
 
 
 def bounce(msg_id: str, reason: str, to: Scope) -> Envelope:

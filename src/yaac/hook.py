@@ -81,11 +81,11 @@ def _parent(pid: int) -> int | None:
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
             return int(stat.read().rpartition(")")[2].split()[1])
-    except (OSError, IndexError, ValueError):
+    except OSError, IndexError, ValueError:
         pass
     try:
         done = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None
     return int(done.stdout.strip()) if done.stdout.strip().isdigit() else None
 

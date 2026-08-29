@@ -241,8 +241,9 @@ class Membership:
             except ValueError as exc:
                 # The version is named because a mismatch is otherwise silent: an endpoint that accepts
                 # connections and answers nothing reads exactly like an empty network.
-                logger.warning("dropping unreadable frame from the hat (protocol %s): %s",
-                               protocol.peek_version(frame), exc)
+                logger.warning(
+                    "dropping unreadable frame from the hat (protocol %s): %s", protocol.peek_version(frame), exc
+                )
                 continue
             self._deliver(envelope)
 
@@ -455,9 +456,7 @@ class Backend:
         which can read the transcript that holds the secret anyway.
         """
         if peer_secret != membership.peer_secret:
-            raise NotConnected(
-                "wrong or missing peer_secret for this connection -- use the one join_channel returned"
-            )
+            raise NotConnected("wrong or missing peer_secret for this connection -- use the one join_channel returned")
 
     async def connect(
         self, channel: str, name: str, peer_uid: str | None = None, peer_secret: str | None = None

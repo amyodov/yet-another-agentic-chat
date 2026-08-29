@@ -432,5 +432,3 @@ async def test_acting_as_a_peer_needs_that_peer_s_secret(endpoint: str, monkeypa
     finally:
         await backend.disconnect_all()
         backend.close()
-
-

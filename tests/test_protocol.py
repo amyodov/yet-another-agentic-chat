@@ -83,8 +83,10 @@ def test_arbitrary_text_survives_the_wire_unchanged(text: str) -> None:
 
 @pytest.mark.parametrize(
     "peer,expected",
-    [(Address("Bob", "01B"), {"channel": "forum", "peer": {"name": "Bob", "zmq_routing_id": "01B"}}),
-     (None, {"channel": "forum"})],
+    [
+        (Address("Bob", "01B"), {"channel": "forum", "peer": {"name": "Bob", "zmq_routing_id": "01B"}}),
+        (None, {"channel": "forum"}),
+    ],
     ids=["whisper", "broadcast"],
 )
 def test_a_message_records_how_it_was_addressed(peer: Address | None, expected: Any) -> None:
@@ -360,7 +362,8 @@ def test_a_scope_ignores_a_field_it_does_not_know() -> None:
 
 
 @pytest.mark.parametrize(
-    "value", ["a string", 42, [], {"channel": 42}, {"peer": "Bob"}],
+    "value",
+    ["a string", 42, [], {"channel": 42}, {"peer": "Bob"}],
     ids=["string", "number", "list", "bad-channel", "bad-peer"],
 )
 def test_a_malformed_scope_is_rejected_rather_than_coerced(value: Any) -> None:

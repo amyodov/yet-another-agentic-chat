@@ -262,6 +262,7 @@ async def test_the_tool_list_only_moves_for_a_client_that_would_notice(
         "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}},
     }
     listing = {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
+
     def leave(answers: dict) -> dict:
         """Leaving needs the secret the join returned, which is what keeps a session from stranding itself."""
         joined = json.loads(answers[3]["result"]["content"][0]["text"])
@@ -335,13 +336,24 @@ async def test_a_server_whose_client_left_lets_go_of_the_port(endpoint: str, joi
     """
     port = int(endpoint.rsplit(":", 1)[1])
     process = await asyncio.create_subprocess_exec(
-        *SERVER, "--endpoint", endpoint, cwd=REPO,
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        *SERVER,
+        "--endpoint",
+        endpoint,
+        cwd=REPO,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
     )
     assert process.stdin and process.stdout
 
-    join = [{"jsonrpc": "2.0", "id": 9, "method": "tools/call",
-             "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}}}]
+    join = [
+        {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}},
+        }
+    ]
     for request in [*handshake(), *(join if joins else [])]:
         process.stdin.write((json.dumps(request) + "\n").encode())
         await process.stdin.drain()
@@ -463,6 +475,7 @@ async def test_mentions_are_checked_before_anything_is_queued(monkeypatch, menti
 async def test_a_mention_of_somebody_absent_is_carried_and_reported(monkeypatch) -> None:
     """Not refused: a mention is social rather than delivery, and "Bob, if you are here" is a normal thing to
     say. But nothing is stored for a session that is not connected, so the sender is told who was not listening."""
+
     class Recording:
         memberships = {"already": object()}
 

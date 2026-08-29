@@ -42,7 +42,6 @@ def whispered(sender: str, recipient: str, body: str) -> dict[str, Any]:
     ).to_wire()
 
 
-
 @pytest.fixture
 async def radios(endpoint: str, monkeypatch) -> AsyncIterator[RadioFactory]:
     """Backends on their own net. The first one made is the one the hook tool reads, standing in for the backend

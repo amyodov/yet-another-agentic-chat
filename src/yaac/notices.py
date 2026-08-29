@@ -162,7 +162,7 @@ class Notices:
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
-        except (TimeoutError, asyncio.IncompleteReadError, OSError):
+        except TimeoutError, asyncio.IncompleteReadError, OSError:
             writer.close()
             return
 
