@@ -406,9 +406,18 @@ def message(
 # else; `op` says which question or answer it is, and the direction says which of the two.
 
 
-def hello(channel: str, name: str, reply_to: str) -> Envelope:
-    """Claim a (channel, name) pair for this routing id."""
-    return message(Scope(), op="hello", payload={"channel": channel, "name": name, "reply_to": reply_to})
+def hello(channel: str, name: str, reply_to: str, peer_uid: str | None = None) -> Envelope:
+    """Claim a (channel, name) pair for this routing id.
+
+    `peer_uid` says which participant is claiming it, as opposed to which connection. It is not a secret and
+    proves nothing -- the hat cannot verify anything, since its table is rebuilt from `hello` after every
+    changeover -- but it lets a hat prefer a returning peer over a stranger asking for the same name, which is
+    the accident this prevents.
+    """
+    payload = {"channel": channel, "name": name, "reply_to": reply_to}
+    if peer_uid is not None:
+        payload["peer_uid"] = peer_uid
+    return message(Scope(), op="hello", payload=payload)
 
 
 def channels_query() -> Envelope:

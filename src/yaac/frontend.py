@@ -208,6 +208,10 @@ async def join_channel(
     ctx: Context,
     channel: Annotated[str, Field(description="Exact channel name, as the user gave it.")],
     name: Annotated[str, Field(description="Exact name, as the user gave it.")],
+    peer_uid: Annotated[
+        str | None, Field(description="From an earlier join, to come back as the same participant.")
+    ] = None,
+    peer_secret: Annotated[str | None, Field(description="The secret that came with that peer_uid.")] = None,
 ) -> dict[str, Any]:
     """Go on air on YAAC (Yet Another Agentic Chat): join CHANNEL as NAME. If nobody is on it, joining is what
     brings the channel into being.
@@ -229,7 +233,7 @@ async def join_channel(
         }
 
     try:
-        result = await radio().connect(channel, name)
+        result = await radio().connect(channel, name, peer_uid=peer_uid, peer_secret=peer_secret)
     except ConnectionRefused as exc:
         return {
             "joined": False,
@@ -243,10 +247,16 @@ async def join_channel(
         "joined": result.channel,
         "name": result.name,
         "connection_id": result.connection_id,
+        "peer_uid": result.peer_uid,
+        "peer_secret": result.peer_secret,
         "created": result.created,
         "peers": result.peers,
         "reminder": (
             "Nothing arrives on its own. Call check_inbox before acting on anything and again before ending your turn."
+        ),
+        "keep_these": (
+            "send, peers and check_inbox need peer_secret. Keep the pair: joining again with both of them comes "
+            "back as this same participant, which is how you reclaim this name after a restart."
         ),
     }
     if not _all_tools_announced:
@@ -279,6 +289,11 @@ async def join_channel(
 
 # -- listed only while on air --------------------------------------------
 
+PEER_SECRET = Annotated[
+    str | None,
+    Field(description="The secret join_channel returned for this connection."),
+]
+
 CONNECTION_ID = Annotated[
     str | None,
     Field(description="Which connection to use. Omit unless this session holds more than one."),
@@ -297,6 +312,7 @@ async def send(
         Any, Field(description="Any JSON to carry beside the text, when structure helps more than prose.")
     ] = None,
     connection_id: CONNECTION_ID = None,
+    peer_secret: PEER_SECRET = None,
 ) -> dict[str, Any]:
     """Send a message to one participant, or to the whole channel if NAME is omitted.
 
@@ -327,6 +343,7 @@ async def send(
 
     try:
         membership = radio().resolve(connection_id)
+        radio().verify(membership, peer_secret)
         message_id = await membership.send(
             body,
             name,
@@ -355,6 +372,7 @@ async def send(
 
 async def check_inbox(
     connection_id: Annotated[str, Field(description="The connection id join_channel gave you. Read only your own.")],
+    peer_secret: PEER_SECRET = None,
 ) -> dict[str, Any]:
     """Collect everything sent to CONNECTION_ID since you last checked.
 
@@ -369,6 +387,7 @@ async def check_inbox(
     """
     try:
         membership = radio().resolve(connection_id)
+        radio().verify(membership, peer_secret)
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
 
@@ -383,10 +402,11 @@ async def check_inbox(
     }
 
 
-async def peers(connection_id: CONNECTION_ID = None) -> dict[str, Any]:
+async def peers(connection_id: CONNECTION_ID = None, peer_secret: PEER_SECRET = None) -> dict[str, Any]:
     """List the names currently on your channel, besides your own."""
     try:
         membership = radio().resolve(connection_id)
+        radio().verify(membership, peer_secret)
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
     others = membership.peers()

@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from yaac import frontend
-from yaac.backend import ConnectionRefused
+from yaac.backend import Backend, ConnectionRefused
 
 REPO = Path(__file__).resolve().parent.parent
 SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
@@ -382,7 +382,7 @@ async def test_a_name_that_is_not_empty_reaches_the_backend_untouched(monkeypatc
     class Recording:
         memberships = {"already": object()}  # so the tool-list notification path is not taken
 
-        async def connect(self, channel: str, name: str):
+        async def connect(self, channel: str, name: str, peer_uid=None, peer_secret=None):
             passed.append(name)
             raise ConnectionRefused("recorded")
 
@@ -405,6 +405,10 @@ async def test_mentions_are_checked_before_anything_is_queued(monkeypatch, menti
 
     class Recording:
         memberships = {"already": object()}
+
+        @staticmethod
+        def verify(_membership, _secret):
+            """The stub holds no secret; what is under test here is what crosses the boundary, not the gate."""
 
         @staticmethod
         def resolve(_):
@@ -447,6 +451,10 @@ async def test_a_mention_of_somebody_absent_is_carried_and_reported(monkeypatch)
         memberships = {"already": object()}
 
         @staticmethod
+        def verify(_membership, _secret):
+            """The stub holds no secret; what is under test here is what crosses the boundary, not the gate."""
+
+        @staticmethod
         def resolve(_):
             class Membership:
                 name = "Alice"
@@ -474,6 +482,39 @@ async def test_a_mention_of_somebody_absent_is_carried_and_reported(monkeypatch)
     answer = await frontend.send("hi", mentions=["Bob", "Carol"])
     assert answer["status"] == "accepted"
     assert answer["mentioned_but_absent"] == ["Carol"]
+
+
+@pytest.mark.parametrize("tool", ["send", "check_inbox", "peers"])
+async def test_acting_as_a_peer_needs_that_peer_s_secret(endpoint: str, monkeypatch, tool: str) -> None:
+    """`join_channel` hands back a pair, and the three tools that act *as* that participant want the secret back.
+
+    It buys no boundary the operating system lacks -- everything runs under one user account, and the secret sits
+    in the transcript -- which is exactly why it is called an honour-system convention. What it prevents is the
+    accident: one conversation reaching into another's connection in a client that runs a single server for the
+    whole application, where connection ids are visible in every result.
+    """
+    backend = Backend(endpoint)
+    monkeypatch.setattr(frontend, "_radio", backend)
+    try:
+        joined = await frontend.join_channel(None, "forum", "ann")
+        assert len(joined["peer_uid"]) == 26
+        assert len(joined["peer_secret"]) == 26
+        assert joined["peer_secret"] != joined["peer_uid"]
+
+        arguments: dict[str, Any] = {"connection_id": joined["connection_id"]}
+        if tool == "send":
+            arguments["body"] = "hi"
+        call = getattr(frontend, tool)
+
+        refused = await call(**arguments)
+        assert "peer_secret" in refused["error"]
+        assert "next_step" in refused  # a refusal that does not say what to do next is a dead end
+
+        allowed = await call(**arguments, peer_secret=joined["peer_secret"])
+        assert "error" not in allowed
+    finally:
+        await backend.disconnect_all()
+        backend.close()
 
 
 def test_no_python_file_reads_or_writes_text_without_naming_the_encoding() -> None:

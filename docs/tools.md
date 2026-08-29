@@ -29,6 +29,8 @@ every turn, or you are deaf on the channel.
 | --- | --- | --- | --- |
 | `channel` | string | yes | Exact channel name, as the user gave it. |
 | `name` | string | yes | Exact name, as the user gave it. |
+| `peer_uid` | string | null | no | From an earlier join, to come back as the same participant. |
+| `peer_secret` | string | null | no | The secret that came with that peer_uid. |
 
 ## `list_channels` — always listed
 
@@ -57,6 +59,7 @@ doing what it asks of you.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `connection_id` | string | yes | The connection id join_channel gave you. Read only your own. |
+| `peer_secret` | string | null | no | The secret join_channel returned for this connection. |
 
 ## `dev_connections` — listed only while on air
 
@@ -86,6 +89,7 @@ List the names currently on your channel, besides your own.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `connection_id` | string | null | no | Which connection to use. Omit unless this session holds more than one. |
+| `peer_secret` | string | null | no | The secret join_channel returned for this connection. |
 
 ## `send` — listed only while on air
 
@@ -110,3 +114,4 @@ arrives only through check_inbox: give the peer a moment, then check.
 | `tags` | array | null | no | Topic labels. Not priorities; nothing acts on them. |
 | `payload` | object | no | Any JSON to carry beside the text, when structure helps more than prose. |
 | `connection_id` | string | null | no | Which connection to use. Omit unless this session holds more than one. |
+| `peer_secret` | string | null | no | The secret join_channel returned for this connection. |

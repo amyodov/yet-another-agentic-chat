@@ -327,3 +327,56 @@ async def test_a_handle_from_another_channel_does_not_resolve(radios: RadioFacto
     assert await heard(b) == []
     [wire] = a.resolve(None).receive()
     assert Envelope.from_wire(wire).op == "bounce"
+
+
+# Peer identity ----------------------------------------------------------
+
+
+async def test_a_peer_comes_back_to_its_own_name_after_a_restart(radios: RadioFactory) -> None:
+    """The failure this exists for: a session whose client restarted asks for the name it just had, and the hat
+    still has it bound to a connection nobody is behind. Eviction is lazy -- it happens when a send to that
+    connection fails -- so without this the owner is locked out of their own name until something happens to fail.
+
+    The uid is not a secret and proves nothing. It prevents the accident; a determined session is not what any of
+    this is for.
+    """
+    first = radios()
+    was = await first.connect(FORUM, "ann")
+    keeping_the_net_up = radios()
+    await keeping_the_net_up.connect(FORUM, "watcher")
+
+    returning = radios()
+    again = await returning.connect(FORUM, "ann", peer_uid=was.peer_uid)
+    assert again.name == "ann"
+    assert again.connection_id != was.connection_id  # a new connection, the same participant
+
+    stranger = radios()
+    with pytest.raises(ConnectionRefused, match="name taken"):
+        await stranger.connect(FORUM, "ann")
+
+
+async def test_rejoining_in_the_same_process_returns_the_membership_it_already_holds(radios: RadioFactory) -> None:
+    """Resuming is not the same as joining twice: the pair names a membership this process still holds, so the
+    answer is that membership rather than a second connection under one identity."""
+    backend = radios()
+    first = await backend.connect(FORUM, "ann")
+    again = await backend.connect(FORUM, "ann", peer_uid=first.peer_uid, peer_secret=first.peer_secret)
+    assert (again.connection_id, again.peer_uid) == (first.connection_id, first.peer_uid)
+    assert len(backend.memberships) == 1
+
+
+async def test_resuming_with_the_wrong_secret_is_refused(radios: RadioFactory) -> None:
+    """The gate is local and only ever local -- the hat is told nothing about secrets and could not check one."""
+    backend = radios()
+    first = await backend.connect(FORUM, "ann")
+    with pytest.raises(NotConnected, match="peer_secret"):
+        await backend.connect(FORUM, "ann", peer_uid=first.peer_uid, peer_secret="not the one")
+
+
+async def test_every_membership_gets_its_own_pair(radios: RadioFactory) -> None:
+    """One process can hold several, and they are different participants as far as anything else is concerned."""
+    backend = radios()
+    here = await backend.connect(FORUM, "ann")
+    there = await backend.connect(OTHER, "ann")
+    assert here.peer_uid != there.peer_uid
+    assert here.peer_secret != there.peer_secret

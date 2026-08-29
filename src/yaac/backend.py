@@ -103,14 +103,24 @@ class Connection:
     name: str
     created: bool
     peers: list[str]
+    peer_uid: str
+    peer_secret: str
 
 
 class Membership:
     """One (channel, name) pair held by this process, with its own DEALER, roster cache and inbox."""
 
-    def __init__(self, backend: Backend, channel: str, name: str) -> None:
+    def __init__(self, backend: Backend, channel: str, name: str, peer_uid: str | None = None) -> None:
         self.backend = backend
         self.routing_id = protocol.new_ulid()
+        # Who this peer is, as opposed to which connection it is holding. `routing_id` changes whenever the DEALER
+        # reconnects and dies with the process; `peer_uid` is meant to outlive both, so a session that comes back
+        # can say it is the same participant rather than a stranger wanting the same name.
+        self.peer_uid = peer_uid or protocol.new_ulid()
+        # An honour-system credential, never sent to the hat, which could not verify it anyway -- its table is
+        # rebuilt from `hello` after every changeover. It exists so that acting as somebody else is a deliberate
+        # act rather than an accident, which is the whole of the claim being made.
+        self.peer_secret = protocol.new_ulid()
         self.channel = channel
         self.name = name
         self.roster: list[Address] = []
@@ -176,7 +186,9 @@ class Membership:
     # -- loops -----------------------------------------------------------
 
     async def _send_hello(self) -> None:
-        await self.dealer.send(protocol.dumps(protocol.hello(self.channel, self.name, self.routing_id).to_wire()))
+        await self.dealer.send(
+            protocol.dumps(protocol.hello(self.channel, self.name, self.routing_id, self.peer_uid).to_wire())
+        )
 
     async def _monitor_loop(self) -> None:
         """Re-send `hello` whenever this DEALER reports EVENT_CONNECTED.
@@ -413,7 +425,22 @@ class Backend:
 
     # -- memberships -----------------------------------------------------
 
-    async def connect(self, channel: str, name: str) -> Connection:
+    def verify(self, membership: Membership, peer_secret: str | None) -> None:
+        """Refuse a call that does not hold this membership's secret.
+
+        The check is local and only ever local: the hat is told nothing about secrets and could not check one, so
+        this prevents accidents and default misuse by well-behaved participants -- one conversation reaching into
+        another's connection in a client that shares a process, most of all -- and never a determined session,
+        which can read the transcript that holds the secret anyway.
+        """
+        if peer_secret != membership.peer_secret:
+            raise NotConnected(
+                "wrong or missing peer_secret for this connection -- use the one join_channel returned"
+            )
+
+    async def connect(
+        self, channel: str, name: str, peer_uid: str | None = None, peer_secret: str | None = None
+    ) -> Connection:
         """Join `channel` as `name` and return the connection id used to address this membership later.
 
         `name` is supplied by the caller and is never derived from the working directory, hostname, or any other
@@ -423,10 +450,23 @@ class Backend:
         live routing_id on that channel, or if no hat answers within HELLO_TIMEOUT_SECONDS.
         """
         for existing in self.memberships.values():
+            if peer_uid is not None and existing.peer_uid == peer_uid:
+                # Resuming inside the same process: the pair names a membership this process still holds, so hand
+                # back the one that exists rather than opening a second connection under the same identity.
+                self.verify(existing, peer_secret)
+                return Connection(
+                    connection_id=existing.routing_id,
+                    channel=existing.channel,
+                    name=existing.name,
+                    created=False,
+                    peers=existing.peer_names(),
+                    peer_uid=existing.peer_uid,
+                    peer_secret=existing.peer_secret,
+                )
             if (existing.channel, existing.name) == (channel, name):
                 raise ConnectionRefused(f"already on {channel!r} as {name!r}")
 
-        membership = Membership(self, channel, name)
+        membership = Membership(self, channel, name, peer_uid=peer_uid)
         self._ensure_election_running()
         self._try_bind()
         try:
@@ -445,6 +485,8 @@ class Backend:
             name=name,
             created=created,
             peers=membership.peer_names(),
+            peer_uid=membership.peer_uid,
+            peer_secret=membership.peer_secret,
         )
 
     async def disconnect(self, connection_id: str | None = None) -> Membership:

@@ -66,6 +66,9 @@ class Hat:
         self.by_name: dict[tuple[str, str], bytes] = {}
         self.channels: dict[str, ChannelInfo] = {}
         self.pending: dict[bytes, list[Held]] = {}
+        # Which participant is behind a connection, as told by `hello`. Soft state like everything else here, and
+        # rebuilt after a changeover by the hellos that follow it.
+        self.peer_uids: dict[bytes, str] = {}
         self.whois_inflight: set[bytes] = set()
 
     # -- transmission ----------------------------------------------------
@@ -100,6 +103,7 @@ class Hat:
         """Remove a routing id from every table and send the remaining members an updated roster."""
         self.pending.pop(routing_id, None)
         self.whois_inflight.discard(routing_id)
+        self.peer_uids.pop(routing_id, None)
         if (identity := self.routing_ids.pop(routing_id, None)) is None:
             return
         self.by_name.pop((identity.channel, identity.name), None)
@@ -192,8 +196,24 @@ class Hat:
             self._send(source, protocol.error("hello needs a channel and a name", to=self._scope_of(source)))
             return
 
+        peer_uid = payload.get("peer_uid") if isinstance(payload.get("peer_uid"), str) else None
         key = (channel_name, name)
-        if (incumbent := self.by_name.get(key)) is not None and incumbent != source:
+        incumbent = self.by_name.get(key)
+        returning = (
+            incumbent is not None
+            and incumbent != source
+            and peer_uid is not None
+            and self.peer_uids.get(incumbent) == peer_uid
+        )
+        if returning:
+                # The same participant coming back on a new connection -- a client restarted, or a DEALER
+                # reconnected under a new routing id. Without this the name is held by a connection nobody is
+                # behind until a send to it happens to fail, and its owner is locked out of their own name.
+                # The uid is not a secret and proves nothing: it prevents the accident, not a determined session.
+                logger.info("peer %r returning on a new connection for %r", peer_uid, key)
+                self.evict(incumbent)
+                incumbent = None
+        if incumbent is not None and incumbent != source:
             # The name is bound to a different routing_id. Refuse rather than reassign, because reassigning would
             # deliver messages intended for the incumbent to the newcomer. The exception is an incumbent that no
             # longer has a live connection -- typically a session killed while its TCP connection was still open --
@@ -216,6 +236,8 @@ class Hat:
         channel.members.add(source)
         self.routing_ids[source] = identity
         self.by_name[key] = source
+        if peer_uid is not None:
+            self.peer_uids[source] = peer_uid
         self.whois_inflight.discard(source)
         # Log only identity changes: reconnect-driven hellos would otherwise repeat a line per participant on every
         # changeover.
