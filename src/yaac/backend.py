@@ -36,7 +36,7 @@ import zmq
 import zmq.asyncio
 from zmq.utils.monitor import parse_monitor_message
 
-from . import protocol
+from . import protocol, wake
 from .hat import Hat
 from .notices import Notices, describe_arrival
 from .protocol import Address
@@ -271,6 +271,7 @@ class Membership:
         self.inbox.append(message)
         # Told to whoever is watching from outside this process, because nothing else can see an inbox move.
         self.backend.notices.announce(describe_arrival(self.channel, self.name, message))
+        self.backend.rouse(self)
         self._changed()
 
     def _changed(self) -> None:
@@ -355,6 +356,7 @@ class Backend:
         # Notices are an extra: everything works without a reader, and nothing here is on the delivery path.
         self.notices = Notices()
         self.notices.snapshot = self.describe_all
+        self._waking: asyncio.Task | None = None
 
     # -- state -----------------------------------------------------------
 
@@ -501,6 +503,28 @@ class Backend:
     async def disconnect_all(self) -> None:
         for connection_id in list(self.memberships):
             await self.disconnect(connection_id)
+
+    def rouse(self, membership: Membership) -> None:
+        """Wake this session, if it asked to be woken and something knows how to reach it.
+
+        Off unless `YAAC_WAKE` is set: starting a turn spends tokens and runs tools in somebody's session, which
+        is not a decision to take on their behalf. Coalescing needs no policy -- one wake drains any number of
+        messages, because reading is a pull -- so a wake already in flight is simply left to finish.
+        """
+        if not wake.wanted() or self.notices.thread is None or self._waking is not None:
+            return
+
+        async def rouse_once() -> None:
+            try:
+                await wake.wake(
+                    self.notices.thread,
+                    f"[YAAC] Mail arrived on {membership.channel!r} for {membership.name!r}. "
+                    f"Call check_inbox to read it. Nobody typed this: another session sent you a message.",
+                )
+            finally:
+                self._waking = None
+
+        self._waking = self._spawn(rouse_once(), "yaac-wake")
 
     def describe_all(self) -> list[dict[str, Any]]:
         return [m.describe() for m in self.memberships.values()]

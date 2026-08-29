@@ -86,7 +86,9 @@ def main() -> None:
     # serves. Given, it wins: stdin's session_id is right only when the server was told the same value.
     given = sys.argv[sys.argv.index("--key") + 1] if "--key" in sys.argv[:-1] else None
     session = given or session_key() or payload.get("session_id")
-    answer = ask(session) if session else None
+    # The thread id travels with the question: this program is the only half that has it, and the server needs it
+    # to wake this session later. Sending it costs nothing -- the ask happens on every hook event anyway.
+    answer = ask(session, thread=payload.get("session_id")) if session else None
     if not answer or not any(connection.get("unread") for connection in answer.get("connections", [])):
         print(silence(CODEX))
         return

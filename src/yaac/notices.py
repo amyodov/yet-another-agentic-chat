@@ -115,6 +115,9 @@ class Notices:
         self.key = key or session_key()
         self.port: int | None = None
         self.snapshot: Callable[[], list[dict[str, Any]]] = list
+        # Which Codex thread this session is, learned from its hook rather than from the environment: Codex tells
+        # a server it spawns nothing about the thread it serves, but it tells every hook, on stdin, every time.
+        self.thread: str | None = None
         self._server: asyncio.Server | None = None
         self._watchers: set[asyncio.StreamWriter] = set()
 
@@ -174,6 +177,9 @@ class Notices:
 
         head = request.decode("latin-1").split("\r\n")
         target = head[0].split(" ")[1] if " " in head[0] else "/"
+        target, _, query = target.partition("?")
+        if query.startswith("thread=") and (thread := query[len("thread=") :]):
+            self.thread = thread
         headers = {}
         for line in head[1:]:
             if ": " in line:
@@ -227,7 +233,7 @@ class Notices:
             writer.close()
 
 
-def ask(key: str, timeout: float = 1.0) -> dict[str, Any] | None:
+def ask(key: str, timeout: float = 1.0, thread: str | None = None) -> dict[str, Any] | None:
     """Ask this session's notice socket what is waiting, from outside the process. Stdlib and blocking on purpose:
     the caller is a hook that runs between turns, and every import it does is latency the user waits through.
 
@@ -236,7 +242,8 @@ def ask(key: str, timeout: float = 1.0) -> dict[str, Any] | None:
     for port in ports_for(key):
         try:
             with socket.create_connection(("127.0.0.1", port), timeout) as connection:
-                connection.sendall(f"GET /{key} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".encode())
+                where = f"/{key}?thread={thread}" if thread else f"/{key}"
+                connection.sendall(f"GET {where} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".encode())
                 received = bytearray()
                 while chunk := connection.recv(4096):
                     received += chunk
