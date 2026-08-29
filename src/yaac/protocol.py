@@ -99,6 +99,24 @@ def loads(frame: bytes) -> Any:
         raise ValueError(f"malformed frame: {exc}") from exc
 
 
+def peek_version(frame: bytes) -> int | None:
+    """The protocol version a frame claims, read from its opening bytes without parsing the message.
+
+    For error paths only. A version mismatch is otherwise silent in the worst way: an older hat drops what it
+    cannot read and answers nothing, and the newer session waiting on it sees a rendezvous point that accepts
+    connections and never replies -- which reads as an empty network. Naming the version turns that into a
+    sentence somebody can act on.
+    """
+    if not frame.startswith(MAGIC_PREFIX):
+        return None
+    digits = bytearray()
+    for byte in frame[len(MAGIC_PREFIX) :]:
+        if not chr(byte).isdigit():
+            break
+        digits.append(byte)
+    return int(digits) if digits else None
+
+
 def parse(frame: bytes) -> Any:
     """Deserialize a received frame and reject anything this build cannot read.
 
@@ -155,6 +173,82 @@ class Address:
             if item is not None and not isinstance(item, str):
                 raise ValueError(f"address {field_name} must be a string or null")
         return cls(name=name, routing_id=routing_id)
+
+
+# Scopes -----------------------------------------------------------------
+
+
+class Absent:
+    """The difference between a field that is missing and one that is present and null.
+
+    `{}` addresses the hat -- no scope at all -- while `{"channel": null}` addresses the world channel, everybody.
+    A serializer that dropped null fields would turn a shout to everyone into a private question to the operator,
+    so absence is carried as its own value rather than represented by `None`, which already means something else.
+    """
+
+    _instance: Absent | None = None
+
+    def __new__(cls) -> Absent:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "ABSENT"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+ABSENT = Absent()
+
+
+@dataclass(frozen=True, slots=True)
+class Scope:
+    """Who a message is for, or who it is from, as fields that compose.
+
+    * `Scope()` -- nothing at all, which addresses whoever wears the hat: technical asks, and the bounces and
+      rosters it sends back. The one scope whose mail the hat reads rather than relays.
+    * `Scope(channel="forum")` -- everybody on that channel.
+    * `Scope(peer=address)` -- that participant, wherever they are.
+    * `Scope(channel="forum", peer=address)` -- that participant as a member of that channel.
+    * `Scope(channel=None)` -- the world channel, everybody there. Reserved: nothing builds it yet.
+
+    Senders never transmit `from` at all; the hat stamps it from its own table, which is what makes `from: {}`
+    unforgeable by construction rather than by validation.
+    """
+
+    channel: str | None | Absent = ABSENT
+    peer: Address | None | Absent = ABSENT
+
+    def to_wire(self) -> dict[str, Any]:
+        """Only the fields that are present, and a present null stays null."""
+        wire: dict[str, Any] = {}
+        if not isinstance(self.channel, Absent):
+            wire["channel"] = self.channel
+        if not isinstance(self.peer, Absent):
+            wire["peer"] = self.peer.to_wire() if self.peer is not None else None
+        return wire
+
+    @classmethod
+    def from_wire(cls, value: Any) -> Scope:
+        """Parse a scope. A missing key is absent; a key whose value is null is present and null."""
+        if not isinstance(value, dict):
+            raise ValueError(f"a scope must be an object, got {type(value).__name__}")
+        channel: str | None | Absent = ABSENT
+        if "channel" in value:
+            channel = value["channel"]
+            if channel is not None and not isinstance(channel, str):
+                raise ValueError("scope channel must be a string or null")
+        peer: Address | None | Absent = ABSENT
+        if "peer" in value:
+            peer = Address.from_wire(value["peer"])
+        return cls(channel=channel, peer=peer)
+
+    @property
+    def is_the_hat(self) -> bool:
+        """True only for a scope with no fields at all -- not for one naming a null channel, which is the world."""
+        return isinstance(self.channel, Absent) and isinstance(self.peer, Absent)
 
 
 # Data messages ----------------------------------------------------------

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from yaac import protocol
-from yaac.protocol import MAGIC, PROTOCOL_VERSION, Address, Destination, Envelope
+from yaac.protocol import MAGIC, PROTOCOL_VERSION, Address, Destination, Envelope, Scope
 
 # Text that has broken naive implementations. Names are raw UTF-8 and are never
 # parsed, split, validated, or case-folded, so all of these must survive intact.
@@ -273,3 +273,75 @@ def test_addresses_accept_either_locator(value: Any, expected: Any) -> None:
 def test_a_malformed_address_is_rejected_rather_than_coerced(value: Any) -> None:
     with pytest.raises(ValueError):
         Address.from_wire(value)
+
+
+# Scopes -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "scope,wire",
+    [
+        (Scope(), {}),
+        (Scope(channel=None), {"channel": None}),
+        (Scope(channel="forum"), {"channel": "forum"}),
+        (Scope(peer=Address("Bob")), {"peer": {"name": "Bob", "zmq_routing_id": None}}),
+        (
+            Scope(channel="forum", peer=Address("Bob")),
+            {"channel": "forum", "peer": {"name": "Bob", "zmq_routing_id": None}},
+        ),
+        (Scope(peer=None), {"peer": None}),
+    ],
+    ids=["hat", "world", "channel", "peer", "channel-and-peer", "null-peer"],
+)
+def test_a_scope_carries_exactly_the_fields_it_was_given(scope: Scope, wire: dict) -> None:
+    """Absence and null are different answers to the same question, in both directions. `{}` addresses the hat;
+    `{"channel": null}` addresses the world channel, everybody. A serializer that dropped nulls would turn a shout
+    to everyone into a private question to the operator, so the round trip is asserted each way rather than
+    assumed."""
+    assert scope.to_wire() == wire
+    assert Scope.from_wire(wire) == scope
+
+
+def test_the_hat_is_the_only_scope_with_nothing_in_it() -> None:
+    """The distinction the whole discipline exists for: no fields at all means the operator, and a null channel
+    means everybody. They must not collapse, and neither must their reverse readings -- `from: {}` is the hat
+    speaking, `from: {"channel": null}` is somebody speaking where everyone hears."""
+    assert Scope().is_the_hat
+    assert not Scope(channel=None).is_the_hat
+    assert protocol.dumps(Scope().to_wire()) != protocol.dumps(Scope(channel=None).to_wire())
+    assert Scope.from_wire({}) != Scope.from_wire({"channel": None})
+
+
+@pytest.mark.parametrize(
+    "value", ["a string", 42, [], {"channel": 42}, {"peer": "Bob"}],
+    ids=["string", "number", "list", "bad-channel", "bad-peer"],
+)
+def test_a_malformed_scope_is_rejected_rather_than_coerced(value: Any) -> None:
+    with pytest.raises(ValueError):
+        Scope.from_wire(value)
+
+
+@pytest.mark.parametrize(
+    "frame,expected",
+    [
+        (b'{"yaac":1,"id":"x"}', 1),
+        (b'{"yaac":17}', 17),
+        (b'{"yaac":"one"}', None),
+        (b"not a yaac message", None),
+        (b"", None),
+    ],
+    ids=["current", "future", "not-a-number", "foreign", "empty"],
+)
+def test_a_version_can_be_read_off_a_frame_that_cannot_be_parsed(frame: bytes, expected: int | None) -> None:
+    """For error paths. A peer that speaks another version answers nothing at all, and the session waiting on it
+    sees a rendezvous point that accepts connections and never replies -- which reads as an empty network rather
+    than a mismatch. Naming the version is what turns that into a sentence somebody can act on."""
+    assert protocol.peek_version(frame) == expected
+
+
+def test_the_refusal_names_both_versions() -> None:
+    """A refusal that does not say what it saw and what it speaks leaves the reader with the empty-net symptom."""
+    with pytest.raises(ValueError) as refusal:
+        protocol.parse(b'{"yaac":99,"id":"x"}')
+    assert "99" in str(refusal.value)
+    assert str(PROTOCOL_VERSION) in str(refusal.value)
