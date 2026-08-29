@@ -188,10 +188,10 @@ class Scope:
     * `Scope(peer=address)` -- that participant, wherever they are.
     * `Scope(channel="forum", peer=address)` -- that participant as a member of that channel.
 
-    **A scope with no effective fields is the hat.** `null`, `{}`, `{"channel": null}` and `{"peer": null}` are
-    four spellings of the same emptiness, and all four read as the operator: an absence is an absence however it
-    was written, and nothing is served by making a reader tell them apart. `to_wire` emits one of them, `{}`, so
-    equal content still gives equal bytes.
+    **The hat is `{}`, and only `{}`.** `null` and `{"channel": null}` mean the same thing a reader would
+    understand, which is exactly why they are refused: one concept deserves one encoding, and a format that
+    accepts synonyms has to keep answering which of them is canonical. A key that appears carries a value; there
+    is no null inside a scope.
 
     That leaves no encoding for "everybody on the unnamed channel", and deliberately: an absence pretending to be
     a value is a poor way to say *everyone*. If the world channel is ever built it says so positively, with a
@@ -215,14 +215,21 @@ class Scope:
 
     @classmethod
     def from_wire(cls, value: Any) -> Scope:
-        """Parse a scope, forgiving every spelling of empty. `null` is accepted as readily as `{}`."""
-        if value is None:
-            return cls()
+        """Parse a scope, refusing every spelling but the one this writes.
+
+        A field that is present carries something: `{"channel": null}` is refused rather than read as the hat,
+        because the hat is `{}` and a second way to say it is only a way to disagree later. Unknown fields are
+        ignored rather than refused -- the format promises that a later version may add a locator without
+        breaking a reader that predates it.
+        """
         if not isinstance(value, dict):
-            raise ValueError(f"a scope must be an object or null, got {type(value).__name__}")
+            raise ValueError(f"a scope must be an object, got {type(value).__name__}")
+        for field_name in ("channel", "peer"):
+            if field_name in value and value[field_name] is None:
+                raise ValueError(f"scope {field_name} is null; the hat is addressed as {{}} and nothing else")
         channel = value.get("channel")
         if channel is not None and not isinstance(channel, str):
-            raise ValueError("scope channel must be a string or null")
+            raise ValueError("scope channel must be a string")
         return cls(channel=channel, peer=Address.from_wire(value.get("peer")))
 
     @property

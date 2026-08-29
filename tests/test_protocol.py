@@ -297,21 +297,26 @@ def test_a_scope_carries_exactly_the_fields_it_was_given(scope: Scope, wire: dic
     assert Scope.from_wire(wire) == scope
 
 
-@pytest.mark.parametrize(
-    "value",
-    [None, {}, {"channel": None}, {"peer": None}, {"channel": None, "peer": None}],
-    ids=["null", "empty", "null-channel", "null-peer", "both-null"],
-)
-def test_every_spelling_of_empty_addresses_the_hat(value: Any) -> None:
-    """An absence is an absence however it was written, and nothing is served by making a reader tell four
-    spellings apart. Writing stays canonical -- `{}` is the only one this ever emits -- so a forgiving parser
-    costs the format nothing.
+def test_the_hat_is_addressed_one_way_and_the_synonyms_are_refused() -> None:
+    """One concept, one encoding. `null` and `{"channel": null}` are what a reader would understand perfectly
+    well, which is why they are refused rather than accepted: a format that takes synonyms has to keep answering
+    which of them is canonical, and every reader that guesses differently is a bug waiting for a peer that
+    disagrees.
 
     It leaves "everybody on the unnamed channel" without an encoding, deliberately: if the world channel is ever
     built it says so with a marker of its own, rather than by an absence a serializer could drop.
     """
-    assert Scope.from_wire(value).is_the_hat
-    assert Scope.from_wire(value).to_wire() == {}
+    assert Scope.from_wire({}).is_the_hat
+    assert Scope().to_wire() == {}
+    for synonym in (None, {"channel": None}, {"peer": None}, {"channel": None, "peer": None}):
+        with pytest.raises(ValueError):
+            Scope.from_wire(synonym)
+
+
+def test_a_scope_ignores_a_field_it_does_not_know() -> None:
+    """The other half of strictness: refusing an unknown field would make every added locator a breaking change,
+    and the format promises the opposite."""
+    assert Scope.from_wire({"channel": "forum", "galaxy": "andromeda"}) == Scope(channel="forum")
 
 
 @pytest.mark.parametrize(
