@@ -406,7 +406,29 @@ def message(
 # else; `op` says which question or answer it is, and the direction says which of the two.
 
 
-def hello(channel: str, name: str, reply_to: str, peer_uid: str | None = None) -> Envelope:
+def sessions_query() -> Envelope:
+    """Ask the operator who is out there, and how to reach them.
+
+    This is what makes one known address enough. A watcher, a hook, a supervisor written in another language --
+    anything that is not the session itself and therefore cannot read a tool result -- connects to the rendezvous
+    point every participant already agrees on, and is told where each session's notice socket is. Nothing is
+    derived, nothing is configured, and nothing has to be reimplemented in whatever language the asker is in.
+    """
+    return message(Scope(), op="sessions")
+
+
+def sessions_answer(sessions: list[dict[str, Any]], to: Scope) -> Envelope:
+    """Who is on this machine: one entry per session, each with the address of its notice socket.
+
+    The hat knows this because every session says so in `hello`. It keeps no mail and no counts -- only where to
+    ask, which is the difference between a directory and the ledger this design has refused twice.
+    """
+    return message(to, frm=Scope(), op="sessions", payload={"sessions": sessions})
+
+
+def hello(
+    channel: str, name: str, reply_to: str, peer_uid: str | None = None, session: dict[str, Any] | None = None
+) -> Envelope:
     """Claim a (channel, name) pair for this routing id.
 
     `peer_uid` says which participant is claiming it, as opposed to which connection. It is not a secret and
@@ -414,9 +436,14 @@ def hello(channel: str, name: str, reply_to: str, peer_uid: str | None = None) -
     changeover -- but it lets a hat prefer a returning peer over a stranger asking for the same name, which is
     the accident this prevents.
     """
-    payload = {"channel": channel, "name": name, "reply_to": reply_to}
+    payload: dict[str, Any] = {"channel": channel, "name": name, "reply_to": reply_to}
     if peer_uid is not None:
         payload["peer_uid"] = peer_uid
+    if session:
+        # How to reach this session from outside its own process, said once rather than derived by everyone who
+        # needs it. The hat holds it so `sessions_query` can answer: a directory entry, not state anything
+        # depends on, rebuilt by the hellos that follow every changeover.
+        payload["session"] = session
     return message(Scope(), op="hello", payload=payload)
 
 

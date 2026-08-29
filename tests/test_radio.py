@@ -242,17 +242,27 @@ async def test_on_air_operations_refuse_while_dormant(radios: RadioFactory, oper
                 membership.peers()
 
 
-async def test_connecting_twice_is_refused_and_a_refusal_leaves_no_trace(radios: RadioFactory) -> None:
-    radio = radios()
-    await radio.connect(FORUM, "ann")
-    with pytest.raises(ConnectionRefused, match="already on"):
-        await radio.connect(FORUM, "ann")
+async def test_joining_a_name_this_process_already_holds_hands_it_back(radios: RadioFactory) -> None:
+    """Not a refusal, and the reason is a failure seen in the wild hours after 0.5.0 shipped.
 
+    A model's context was compacted, taking the pair `join_channel` had returned with it. `send`, `peers` and
+    `check_inbox` then refused -- correctly, since it could not present the secret -- and joining again was
+    refused too, because the name was still held. The session was left deaf, mute, and unable to reclaim a name
+    nobody else could take, with no way back at all.
+
+    So a join that names a membership this process already holds returns it, secret and all. Nothing is given
+    away: the caller is inside the process that owns it, and already had the connection id.
+    """
+    radio = radios()
+    first = await radio.connect(FORUM, "ann")
+    again = await radio.connect(FORUM, "ann")
+    assert (again.connection_id, again.peer_secret) == (first.connection_id, first.peer_secret)
+    assert len(radio.memberships) == 1
+
+    # Somebody else asking for that name is still refused, which is the part that was always right.
     loser = radios()
     with pytest.raises(ConnectionRefused, match="taken"):
         await loser.connect(FORUM, "ann")
-    # A refused join must leave the backend exactly as dormant as it was.
-    assert [loser.on_air, loser.is_wearing_hat, loser.memberships] == [False, False, {}]
 
 
 async def test_one_process_holds_several_memberships_independently(radios: RadioFactory) -> None:

@@ -49,7 +49,14 @@ async def run_server(endpoint: str, requests: list[dict], env: dict[str, str] | 
         The server routing_ids requests concurrently, so pipelining them lets a tools/list overtake the tools/call that
         was supposed to change the tool list.
         """
-        for request in requests:
+        for step in requests:
+            # A callable is given every answer so far: a test that must present a value the server invented --
+            # a connection id, a peer secret -- cannot write it into a list prepared in advance.
+            if callable(step):
+                answered = [json.loads(line) for line in lines]
+                request = step({m["id"]: m for m in answered if "id" in m})
+            else:
+                request = step
             process.stdin.write((json.dumps(request) + "\n").encode())
             await process.stdin.drain()
             if "id" not in request:
@@ -255,7 +262,16 @@ async def test_the_tool_list_only_moves_for_a_client_that_would_notice(
         "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}},
     }
     listing = {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
-    leave = {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "leave_channel", "arguments": {}}}
+    def leave(answers: dict) -> dict:
+        """Leaving needs the secret the join returned, which is what keeps a session from stranding itself."""
+        joined = json.loads(answers[3]["result"]["content"][0]["text"])
+        return {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "leave_channel", "arguments": {"peer_secret": joined["peer_secret"]}},
+        }
+
     final = {"jsonrpc": "2.0", "id": 6, "method": "tools/list"}
     stdout, _ = await run_server(endpoint, handshake(client_name) + [connect, listing, leave, final])
     messages = decode(stdout)

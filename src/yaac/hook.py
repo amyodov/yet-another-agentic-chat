@@ -14,10 +14,13 @@ it says there is mail, and `check_inbox` hands it over.
 """
 
 import json
+import os
+import subprocess
 import sys
 from typing import Any
 
-from .notices import ask, session_key
+from .directory import directory
+from .notices import ask
 
 CODEX = "codex"
 CONTINUATION_EVENTS = frozenset({"Stop", "SubagentStop"})
@@ -56,12 +59,104 @@ def _waiting(answer: dict[str, Any]) -> str:
     )
 
 
+def _ancestry(depth: int = 12) -> set[int]:
+    """This process's line of descent. Used only to break a tie, and empty is an acceptable answer.
+
+    A hook and the server it belongs to are children of the same client process, so when two sessions are working
+    in one directory their ancestries are what still tells them apart. `/proc` where it exists, `ps` where it does
+    not, `ctypes` on Windows -- and silence if none of that works, because a tie left unbroken is reported as
+    nothing rather than as somebody else's mail.
+    """
+    line: set[int] = set()
+    current = os.getpid()
+    while current and current not in line and len(line) < depth:
+        line.add(current)
+        current = _parent(current) or 0
+    return line
+
+
+def _parent(pid: int) -> int | None:
+    if sys.platform == "win32":
+        return _parent_windows(pid)
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
+            return int(stat.read().rpartition(")")[2].split()[1])
+    except (OSError, IndexError, ValueError):
+        pass
+    try:
+        done = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return int(done.stdout.strip()) if done.stdout.strip().isdigit() else None
+
+
+def _parent_windows(pid: int) -> int | None:
+    """Windows keeps no `/proc` and its `ps` is not `ps`, so this reads the Toolhelp snapshot the API provides."""
+    import ctypes
+
+    class Entry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_ulong),
+            ("cntUsage", ctypes.c_ulong),
+            ("th32ProcessID", ctypes.c_ulong),
+            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+            ("th32ModuleID", ctypes.c_ulong),
+            ("cntThreads", ctypes.c_ulong),
+            ("th32ParentProcessID", ctypes.c_ulong),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", ctypes.c_ulong),
+            ("szExeFile", ctypes.c_char * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    if snapshot == -1:
+        return None
+    entry = Entry()
+    entry.dwSize = ctypes.sizeof(Entry)
+    try:
+        if not kernel32.Process32First(snapshot, ctypes.byref(entry)):
+            return None
+        while entry.th32ProcessID != pid:
+            if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
+                return None
+        return int(entry.th32ParentProcessID)
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def mine(sessions: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Which of the sessions on this machine is the one this hook belongs to.
+
+    Three ways, in order of how much they prove. The client's own name for the session, when it tells both halves
+    -- Claude Code does. Otherwise the working directory, which Codex gives every hook and which its servers are
+    spawned in. And where that leaves more than one, the process line they share, because a hook and its server
+    descend from the same client.
+
+    Nothing left ambiguous is answered: reporting the wrong session's mail is worse than reporting none.
+    """
+    client = payload.get("session_id")
+    if client and (exact := [s for s in sessions if s.get("client") == client]):
+        return exact[0]
+    candidates = [s for s in sessions if s.get("cwd") and s.get("cwd") == payload.get("cwd")]
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        return None
+    line = _ancestry()
+    related = [s for s in candidates if s.get("pid") in line]
+    return related[0] if len(related) == 1 else None
+
+
 def main() -> None:
     """Answer a Codex hook. Reads the hook payload on stdin, writes the hook contract on stdout.
 
-    Silence is the common case and every failure is silence too: a hook that cannot reach the notice socket, or
-    finds no session id, has learned nothing rather than found nothing, and either way the mail is still in the
-    inbox for `check_inbox` to collect.
+    Finds its own session through the rendezvous point every participant already agrees on: one known address,
+    a directory of who is out there, and the notice socket of whichever entry is this hook's own. Nothing is
+    configured, nothing is derived, and nothing has to be kept in step by hand.
+
+    Silence is the common case and every failure is silence too: no net, no session that matches, nothing
+    listening. The mail is in the inbox regardless, for `check_inbox` to collect.
     """
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -75,20 +170,14 @@ def main() -> None:
         return
 
     # A continuation prompt ends in another Stop, which would find the same unread mail and continue again --
-    # measured, and it ran until it was killed. The in-process hook cannot loop because delivering there consumes;
-    # this one only reports a count, so it needs the flag Codex sets for exactly this. Said once per turn is
-    # enough: a model that ignores it is choosing to, and a message stays in the inbox either way.
+    # measured, and it ran until it was killed. Delivering here reports rather than consumes, so the flag Codex
+    # sets for exactly this is what stops it. Said once per turn is enough.
     if payload.get("stop_hook_active"):
         print(silence(CODEX))
         return
 
-    # --key is how a Codex user names the session, since Codex tells a server nothing about which thread it
-    # serves. Given, it wins: stdin's session_id is right only when the server was told the same value.
-    given = sys.argv[sys.argv.index("--key") + 1] if "--key" in sys.argv[:-1] else None
-    session = given or session_key() or payload.get("session_id")
-    # The thread id travels with the question: this program is the only half that has it, and the server needs it
-    # to wake this session later. Sending it costs nothing -- the ask happens on every hook event anyway.
-    answer = ask(session, thread=payload.get("session_id")) if session else None
+    session = mine(directory(), payload)
+    answer = ask(session["watch"], thread=payload.get("session_id")) if session and session.get("watch") else None
     if not answer or not any(connection.get("unread") for connection in answer.get("connections", [])):
         print(silence(CODEX))
         return

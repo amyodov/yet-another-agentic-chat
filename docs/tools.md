@@ -63,10 +63,12 @@ doing what it asks of you.
 
 ## `dev_connections` — listed only while on air
 
-Diagnostic: every connection this session holds, with ids, channels, names and unread counts.
+Diagnostic: every connection this session holds, with ids, channels, names and unread counts, and the
+address anything outside this process would watch for arrivals.
 
 Not needed in normal use -- one connection needs no id, and a call that is ambiguous already reports the
-choices. Useful when inspecting what a session is actually holding.
+choices. Useful when inspecting what a session is actually holding, and when something outside needs the
+watch address after the join that first reported it has scrolled away.
 
 *Read-only: changes nothing, safe to call at any time.*
 
@@ -79,6 +81,7 @@ Leave one channel and remove that connection's inbox. Any other channel you are 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `connection_id` | string | null | no | Which connection to use. Omit unless this session holds more than one. |
+| `peer_secret` | string | null | no | The secret join_channel returned for this connection. |
 
 ## `peers` — listed only while on air
 

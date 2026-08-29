@@ -17,7 +17,7 @@ import pytest
 from yaac import notices, protocol
 from yaac.backend import Backend
 from yaac.hook import envelope
-from yaac.notices import Notices, ask, describe_arrival, ports_for
+from yaac.notices import Notices, ask, describe_arrival
 from yaac.protocol import Address, Scope
 
 FORUM = "forum"
@@ -72,19 +72,16 @@ async def next_notice(reader: asyncio.StreamReader) -> str:
     return (await asyncio.wait_for(reader.readexactly(length), timeout=5)).decode("utf-8")
 
 
-def test_both_sides_of_a_session_derive_the_same_ports() -> None:
-    """The whole reason nothing is written to disk: the server and the hook are children of one client session and
-    can each compute where the other is. `hash()` would not do -- it is salted per process."""
-    assert ports_for("01a048c1-0c17-7fe2-b179-6c34aeaa5489") == ports_for("01a048c1-0c17-7fe2-b179-6c34aeaa5489")
-    assert ports_for("one") != ports_for("another")
-    walked = ports_for("01a048c1")
-    for port in walked:
-        # Below the ephemeral range on every platform, so the kernel cannot hand one out as a source port.
-        assert 20_000 <= port < 24_000
-    assert len(set(walked)) == len(walked)
-    # Spread out on purpose: Windows reserves blocks of ports for Hyper-V and WSL, often a few hundred wide, and
-    # a consecutive walk could land entirely inside one -- which looks like a feature that does not work there.
-    assert min(abs(a - b) for a in walked for b in walked if a != b) > 100
+def test_a_session_publishes_where_it_can_be_reached() -> None:
+    """The address is taken from the kernel and told to everyone, rather than computed from a name.
+
+    What replaced the derivation: nothing is chosen, so nothing can collide or be reserved by another program;
+    nothing is computed, so no reader has to reimplement a digest in whatever language it happens to be written
+    in; and the token in the path keeps a scan of loopback from reading somebody's notices.
+    """
+    first, second = Notices(client="a"), Notices(client="b")
+    assert first.token != second.token
+    assert first.url is None  # nothing is published until something is listening
 
 
 def carried(**kwargs) -> dict[str, Any]:
@@ -161,8 +158,8 @@ async def test_a_program_that_runs_once_is_answered_with_what_is_waiting(radios:
     await talker.resolve(None).send("waiting for you", name="ann")
     await asyncio.sleep(SETTLE)
 
-    answer = await asyncio.to_thread(ask, listener.notices.key)
-    assert answer["session"] == listener.notices.key
+    answer = await asyncio.to_thread(ask, listener.notices.url)
+    assert answer["session"] == listener.notices.client
     assert [(c["channel"], c["name"], c["unread"]) for c in answer["connections"]] == [(FORUM, "ann", 1)]
     assert answer["connections"][0]["connection_id"] == joined.connection_id
 
@@ -172,13 +169,13 @@ async def test_nothing_listens_until_there_is_something_to_hear(radios: RadioFac
     moment the last membership does."""
     quiet = radios()
     assert quiet.notices.url is None
-    assert await asyncio.to_thread(ask, quiet.notices.key or "nobody") is None
 
     await quiet.connect(FORUM, "ann")
-    assert quiet.notices.url is not None
+    url = quiet.notices.url
+    assert url is not None
     await quiet.disconnect_all()
     await asyncio.sleep(SETTLE)
-    assert await asyncio.to_thread(ask, quiet.notices.key) is None
+    assert await asyncio.to_thread(ask, url) is None
 
 
 async def test_another_sessions_socket_answers_nothing(radios: RadioFactory) -> None:
@@ -213,9 +210,31 @@ def test_the_hook_program_and_the_hook_tool_speak_one_contract(event: str, clien
 
 
 def test_a_client_that_names_no_session_is_still_served(monkeypatch) -> None:
-    """Claude Desktop offers no session id. The derived port is then unavailable -- so no out-of-process program
-    can find it -- but a watcher told the url by join_channel still works, which is the reader that matters."""
-    for variable in notices.SESSION_ENV:
+    """Claude Desktop offers no session id, and it costs nothing: the address does not come from a name.
+
+    Nothing here is derived any more -- the socket takes whatever port the kernel gives, mints its own token, and
+    the pair is published for anyone who asks. A client that says nothing about its sessions is served exactly as
+    well as one that does; it only loses the ability to be recognised *by that name* later.
+    """
+    for variable in notices.CLIENT_ENV:
         monkeypatch.delenv(variable, raising=False)
-    assert Notices().key is None
-    assert Notices().path == "yaac"
+    quiet = Notices()
+    assert quiet.client is None
+    assert len(quiet.token) == 26
+
+
+async def test_the_watch_address_can_be_asked_for_again(radios: RadioFactory, monkeypatch) -> None:
+    """`join_channel` reports it once, to whoever called it. Anything else that needs it -- a supervisor, a
+    watcher, a program in another language -- has no way back to that answer, and should not have to reconstruct
+    an address to reach a socket that is already running.
+    """
+    from yaac import frontend
+
+    backend = radios()
+    monkeypatch.setattr(frontend, "_radio", backend)
+    assert "watch" not in await frontend.dev_connections()  # nothing listens until something has joined
+
+    await backend.connect(FORUM, "ann")
+    listed = await frontend.dev_connections()
+    assert listed["watch"] == backend.notices.url
+    assert listed["watch"].startswith("ws://127.0.0.1:")

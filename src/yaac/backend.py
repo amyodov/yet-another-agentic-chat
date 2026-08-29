@@ -185,9 +185,28 @@ class Membership:
 
     # -- loops -----------------------------------------------------------
 
+    def describe_session(self) -> dict[str, Any]:
+        """How to reach this session from outside its own process.
+
+        Everything here is a fact about this process rather than a name anybody chose: where its notice socket
+        is, which process it is, and where it is working. A reader matches on whichever of those it can see --
+        a hook knows the working directory it was run in, a supervisor watching a machine knows nothing and
+        wants them all.
+        """
+        described: dict[str, Any] = {"pid": os.getpid(), "cwd": os.getcwd()}
+        if url := self.backend.notices.url:
+            described["watch"] = url
+        if client := self.backend.notices.client:
+            described["client"] = client
+        return described
+
     async def _send_hello(self) -> None:
         await self.dealer.send(
-            protocol.dumps(protocol.hello(self.channel, self.name, self.routing_id, self.peer_uid).to_wire())
+            protocol.dumps(
+                protocol.hello(
+                    self.channel, self.name, self.routing_id, self.peer_uid, session=self.describe_session()
+                ).to_wire()
+            )
         )
 
     async def _monitor_loop(self) -> None:
@@ -466,11 +485,27 @@ class Backend:
                     peer_secret=existing.peer_secret,
                 )
             if (existing.channel, existing.name) == (channel, name):
-                raise ConnectionRefused(f"already on {channel!r} as {name!r}")
+                # Not a refusal: this process is already that participant, and the caller is inside this process.
+                # A model that lost its pair -- compacted context, a truncated answer, a fresh turn -- has no way
+                # back to a name it still holds, and refusing here leaves it deaf, mute, and unable to rejoin
+                # under a name nobody else can take. Observed in the wild within hours of 0.5.0.
+                logger.info("%r on %r asked to join again; handing back the membership it holds", name, channel)
+                return Connection(
+                    connection_id=existing.routing_id,
+                    channel=existing.channel,
+                    name=existing.name,
+                    created=False,
+                    peers=existing.peer_names(),
+                    peer_uid=existing.peer_uid,
+                    peer_secret=existing.peer_secret,
+                )
 
         membership = Membership(self, channel, name, peer_uid=peer_uid)
         self._ensure_election_running()
         self._try_bind()
+        # Before `hello`, not after: the address goes out in that message, and a session that announced nothing
+        # would be invisible to everything that cannot read a tool result.
+        await self.notices.start()
         try:
             created = await membership.open()
         except BaseException:
@@ -479,7 +514,6 @@ class Backend:
             raise
 
         self.memberships[membership.routing_id] = membership
-        await self.notices.start()
         logger.info("on air as %r on %r (%s)", name, channel, "hat" if self.is_wearing_hat else "participant")
         return Connection(
             connection_id=membership.routing_id,

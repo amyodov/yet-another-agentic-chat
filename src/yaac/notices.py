@@ -1,12 +1,15 @@
 """The notice socket: how a process outside this one learns that mail arrived.
 
-The inbox lives in the server process's memory, so nothing outside it can see an arrival. Two readers need to, and
-neither can call an MCP tool: Claude Code's `Monitor`, which turns each line it reads into an event injected into
-a session that may be sitting idle, and a Codex hook, which is a separate program run between turns.
+The inbox lives in the server process's memory, so nothing outside it can see an arrival. Two readers need to,
+and neither can call an MCP tool: Claude Code's `Monitor`, which turns each line it reads into an event injected
+into a session that may be sitting idle, and a Codex hook, which is a separate program run between turns.
 
-Both are children of the same client session that spawned this server, and a client hands its session id to all of
-its children -- `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID` -- so all three can derive the same port from it. That
-is what keeps this file-free: no path to agree on, no port to write down, no registry to keep true.
+**The address is published, not derived.** The socket takes whatever port the kernel offers, and the session
+announces it in `hello`; anything that needs it asks the rendezvous point every participant already agrees on.
+An earlier version computed the port from a name the user had to write into two config files, which was wrong
+three times over: a client with one configuration block for the whole machine cannot give its sessions different
+names, the digest is not reproducible from every language that might want to listen, and it made an address out
+of something nobody had to agree on in the first place.
 
 Notices carry no body. They say that something arrived and for which membership; `check_inbox` still delivers.
 So a notice that is dropped, capped, or never read costs nothing at all -- the mail is untouched in the inbox --
@@ -18,37 +21,25 @@ import base64
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import socket
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
+from . import protocol
 from .protocol import Envelope
 
-SESSION_ENV = ("YAAC_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
-"""Names under which this process may already know which session it belongs to, best first.
+logger = logging.getLogger(__name__)
 
-Claude Code puts `CLAUDE_CODE_SESSION_ID` in the environment of the server it spawns, and gives a hook the same
-value as `session_id` on stdin, so its two halves find each other with nothing configured.
+CLIENT_ENV = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
+"""What a client calls the session it spawned, when it says so at all. Published in the directory so a reader can
+recognise a session it already knows the name of; never used to compute anything, and its absence costs nothing."""
 
-Codex does not: measured on 0.147.0, a server it spawns has neither `CODEX_THREAD_ID` nor anything else naming
-the thread, though its hooks do get `session_id`. So the halves cannot derive a shared value and have to be told
-one -- `env` on the server in `config.toml`, `--key` on the hook in `hooks.json`, the same string in both. That is
-why `YAAC_SESSION` comes first: it is the only one a user sets, and setting it should win."""
-
-# Below the ephemeral range on every platform (Linux starts at 32768, macOS and Windows higher still), so the
-# kernel will not hand one of these out as a source port and collide with a listener that is about to exist.
-PORT_BASE = 20_000
-PORT_SPAN = 4_000
-PORT_PROBES = 8
-PORT_STRIDE = 251
-"""How far to walk when the derived port is taken, and how far apart the steps are.
-
-Two sessions can derive the same port, so both sides walk the same short sequence and the reader confirms the
-session id in the answer rather than trusting the port alone. The stride is what keeps that sequence spread out:
-Windows reserves blocks of ports for Hyper-V and WSL -- `netsh interface ipv4 show excludedportrange` lists them,
-often a few hundred wide -- and eight consecutive tries could land entirely inside one, which looks from the
-outside like a feature that simply does not work there. A prime stride wanders across the span instead."""
+ASK_TIMEOUT_SECONDS = 0.5
+"""One timeout for a question to a socket that may not be there. Loopback answers in microseconds when something
+is listening, so this is generous for the case that works and cheap for the case that does not."""
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # RFC 6455, the constant a server hashes the client key against
 NOTICE_LIMIT = 200
@@ -56,23 +47,12 @@ NOTICE_LIMIT = 200
 over-long one degrades to the part that is always true instead of being truncated into something misleading."""
 
 
-def session_key() -> str | None:
-    """The client session id this server was launched under, or None when the client offers none."""
-    for variable in SESSION_ENV:
+def client_session() -> str | None:
+    """What this session's client calls it, if the client says. Claude Code does; Codex tells only its hooks."""
+    for variable in CLIENT_ENV:
         if value := os.environ.get(variable):
             return value
     return None
-
-
-def ports_for(key: str) -> list[int]:
-    """The ports a given session's notice socket may be on, in the order both sides try them.
-
-    blake2s rather than `hash()`, which is salted per process and would give the reader a different answer than
-    the writer.
-    """
-    seed = int.from_bytes(hashlib.blake2s(key.encode("utf-8"), digest_size=4).digest(), "big")
-    first = seed % PORT_SPAN
-    return [PORT_BASE + (first + step * PORT_STRIDE) % PORT_SPAN for step in range(PORT_PROBES)]
 
 
 def describe_arrival(channel: str, name: str, message: dict[str, Any]) -> str:
@@ -117,8 +97,12 @@ class Notices:
     process. Each notice names its channel and name, so a session on several channels can tell them apart.
     """
 
-    def __init__(self, key: str | None = None) -> None:
-        self.key = key or session_key()
+    def __init__(self, client: str | None = None) -> None:
+        self.client = client or client_session()
+        # A fresh token per process, so the address is unguessable even though the port is not chosen. It costs
+        # nothing and keeps a scan of loopback from reading somebody's notices; it is not a secret, because
+        # anything that can ask the rendezvous point is already being told it.
+        self.token = protocol.new_ulid()
         self.port: int | None = None
         self.snapshot: Callable[[], list[dict[str, Any]]] = list
         # Which Codex thread this session is, learned from its hook rather than from the environment: Codex tells
@@ -134,23 +118,24 @@ class Notices:
 
     @property
     def path(self) -> str:
-        """The session id doubles as the path. It is not a secret, but it is not guessable either, so a scan of
-        loopback finds a listener that answers nothing without it."""
-        return self.key or "yaac"
+        """The token, which is what makes the published address specific rather than merely reachable."""
+        return self.token
 
     async def start(self) -> None:
-        """Listen on the first free port of this session's sequence. Failure is not fatal: notices are an extra."""
+        """Listen on whatever port the kernel offers. Failure is not fatal: notices are an extra.
+
+        Nothing is chosen and nothing is derived, so nothing can collide, be reserved by another program, or need
+        reimplementing in another language. The address is published in `hello` and answered by the hat to anyone
+        who asks -- which is the same one address everything else here already uses.
+        """
         if self._server is not None:
             return
-        candidates = ports_for(self.key) if self.key else [0]
-        for port in candidates:
-            try:
-                self._server = await asyncio.start_server(self._serve, "127.0.0.1", port)
-            except OSError:
-                continue
-            else:
-                self.port = self._server.sockets[0].getsockname()[1]
-                return
+        try:
+            self._server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
+        except OSError as exc:
+            logger.warning("no notice socket this session: %s", exc)
+            return
+        self.port = self._server.sockets[0].getsockname()[1]
 
     async def stop(self) -> None:
         """Close the listener and every watcher, so the port is free the moment the last membership goes."""
@@ -203,7 +188,7 @@ class Notices:
     async def _answer_once(self, writer: asyncio.StreamWriter) -> None:
         """What a hook reads: the unread state now, and the session it belongs to so the reader can confirm it
         reached the right process rather than another session that derived the same port."""
-        body = json.dumps({"session": self.key, "connections": self.snapshot()}).encode("utf-8")
+        body = json.dumps({"session": self.client, "connections": self.snapshot()}).encode("utf-8")
         writer.write(
             b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
             + f"Content-Length: {len(body)}\r\n".encode("ascii")
@@ -239,28 +224,28 @@ class Notices:
             writer.close()
 
 
-def ask(key: str, timeout: float = 1.0, thread: str | None = None) -> dict[str, Any] | None:
-    """Ask this session's notice socket what is waiting, from outside the process. Stdlib and blocking on purpose:
-    the caller is a hook that runs between turns, and every import it does is latency the user waits through.
+def ask(url: str, timeout: float = ASK_TIMEOUT_SECONDS, thread: str | None = None) -> dict[str, Any] | None:
+    """Ask one session's notice socket what is waiting, given the address the directory published for it.
 
-    Returns None when nothing is listening, which is the normal answer for a session that has joined nothing.
+    Stdlib and blocking on purpose: the caller is a hook that runs between turns, and every import it makes is
+    latency somebody waits through. One address, one connection, one timeout -- where an earlier version tried
+    eight derived ports in turn and, on Windows, paid a full timeout for each of the seven that were not there.
+
+    Returns None when nothing answers, which is the ordinary reply for a session that has since gone.
     """
-    for port in ports_for(key):
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout) as connection:
-                where = f"/{key}?thread={thread}" if thread else f"/{key}"
-                connection.sendall(f"GET {where} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".encode())
-                received = bytearray()
-                while chunk := connection.recv(4096):
-                    received += chunk
-        except OSError:
-            continue
-        _, _, body = bytes(received).partition(b"\r\n\r\n")
-        try:
-            answer = json.loads(body)
-        except ValueError:
-            continue
-        # Another session may hold the first port of this sequence, so the answer has to name whose it is.
-        if answer.get("session") == key:
-            return answer
-    return None
+    parsed = urlparse(url)
+    host, port = parsed.hostname or "127.0.0.1", parsed.port or 0
+    where = f"{parsed.path or '/'}?thread={thread}" if thread else (parsed.path or "/")
+    try:
+        with socket.create_connection((host, port), timeout) as connection:
+            connection.sendall(f"GET {where} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+            received = bytearray()
+            while chunk := connection.recv(4096):
+                received += chunk
+    except OSError:
+        return None
+    _, _, body = bytes(received).partition(b"\r\n\r\n")
+    try:
+        return json.loads(body)
+    except ValueError:
+        return None

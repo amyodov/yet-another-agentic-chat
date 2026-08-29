@@ -419,9 +419,12 @@ async def peers(connection_id: CONNECTION_ID = None, peer_secret: PEER_SECRET = 
     }
 
 
-async def leave_channel(ctx: Context, connection_id: CONNECTION_ID = None) -> dict[str, Any]:
+async def leave_channel(
+    ctx: Context, connection_id: CONNECTION_ID = None, peer_secret: PEER_SECRET = None
+) -> dict[str, Any]:
     """Leave one channel and remove that connection's inbox. Any other channel you are on is unaffected."""
     try:
+        radio().verify(radio().resolve(connection_id), peer_secret)
         membership = await radio().disconnect(connection_id)
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
@@ -435,13 +438,21 @@ async def leave_channel(ctx: Context, connection_id: CONNECTION_ID = None) -> di
 
 
 async def dev_connections() -> dict[str, Any]:
-    """Diagnostic: every connection this session holds, with ids, channels, names and unread counts.
+    """Diagnostic: every connection this session holds, with ids, channels, names and unread counts, and the
+    address anything outside this process would watch for arrivals.
 
     Not needed in normal use -- one connection needs no id, and a call that is ambiguous already reports the
-    choices. Useful when inspecting what a session is actually holding.
+    choices. Useful when inspecting what a session is actually holding, and when something outside needs the
+    watch address after the join that first reported it has scrolled away.
     """
     open_connections = radio().describe_all()
-    return {"connections": open_connections, "count": len(open_connections)}
+    answer: dict[str, Any] = {"connections": open_connections, "count": len(open_connections)}
+    if watch := radio().notices.url:
+        # `join_channel` says this once, and only to whoever called it. A program written in another language --
+        # a supervisor, a watcher, anything not holding this session's tool results -- has no way back to it, and
+        # should not have to reconstruct an address to find a socket that is already running.
+        answer["watch"] = watch
+    return answer
 
 
 def _shown(message: dict[str, Any]) -> str:

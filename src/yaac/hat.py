@@ -21,6 +21,7 @@ libzmq built without draft support, so ``setsockopt`` rejects it with ``EINVAL``
 ``whois`` covers the remaining case: a data message from a routing id absent from the table.
 """
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -69,6 +70,9 @@ class Hat:
         # Which participant is behind a connection, as told by `hello`. Soft state like everything else here, and
         # rebuilt after a changeover by the hellos that follow it.
         self.peer_uids: dict[bytes, str] = {}
+        # Where each session can be reached from outside its own process, also as told by `hello`. A directory,
+        # not a ledger: it holds addresses, never mail and never counts.
+        self.sessions: dict[bytes, dict[str, Any]] = {}
         self.whois_inflight: set[bytes] = set()
 
     # -- transmission ----------------------------------------------------
@@ -80,14 +84,35 @@ class Hat:
         departure is detected, since `ROUTER_NOTIFY` disconnect events are unavailable.
         """
         try:
-            self.router.send_multipart([routing_id, protocol.dumps(message.to_wire())], zmq.NOBLOCK)
-            return True
+            sending = self.router.send_multipart([routing_id, protocol.dumps(message.to_wire())], zmq.NOBLOCK)
         except zmq.ZMQError as exc:
-            if exc.errno in (zmq.EHOSTUNREACH, zmq.EAGAIN):
-                logger.info("peer unreachable, evicting %r: %s", routing_id, zmq.strerror(exc.errno))
-                self.evict(routing_id)
-                return False
-            raise
+            return self._unreachable(routing_id, exc)
+
+        # On a `zmq.asyncio` socket the send is a future, and `EHOSTUNREACH` for a peer that has gone arrives
+        # *after* this returns -- so the `except` above never sees it. Left alone it escapes into the event loop
+        # as an unhandled error, and, worse, the eviction never happens: this is the only place a departure is
+        # detected, which is what the whole "no heartbeat, no TTL" design rests on. A name whose holder had
+        # quietly gone therefore stayed taken, which is exactly what a user hit.
+        if isinstance(sending, asyncio.Future):
+            sending.add_done_callback(lambda done: self._sent(routing_id, done))
+        return True
+
+    def _sent(self, routing_id: bytes, done: asyncio.Future) -> None:
+        """What became of a send that finished after we stopped looking."""
+        if done.cancelled():
+            return
+        if isinstance(exc := done.exception(), zmq.ZMQError):
+            self._unreachable(routing_id, exc)
+        elif exc is not None:
+            logger.warning("sending to %r failed: %r", routing_id, exc)
+
+    def _unreachable(self, routing_id: bytes, exc: zmq.ZMQError) -> bool:
+        """Evict a peer the ROUTER could not reach. Anything else is not ours to swallow."""
+        if exc.errno not in (zmq.EHOSTUNREACH, zmq.EAGAIN):
+            raise exc
+        logger.info("peer unreachable, evicting %r: %s", routing_id, zmq.strerror(exc.errno))
+        self.evict(routing_id)
+        return False
 
     def _reachable(self, routing_id: bytes) -> bool:
         """Test whether a routing id is still connected, by sending it a `whois`.
@@ -104,6 +129,7 @@ class Hat:
         self.pending.pop(routing_id, None)
         self.whois_inflight.discard(routing_id)
         self.peer_uids.pop(routing_id, None)
+        self.sessions.pop(routing_id, None)
         if (identity := self.routing_ids.pop(routing_id, None)) is None:
             return
         self.by_name.pop((identity.channel, identity.name), None)
@@ -135,6 +161,22 @@ class Hat:
         members = self.addresses(channel_name)
         for routing_id in self.members(channel_name):
             self._send(routing_id, protocol.roster(channel_name, members, to=self._scope_of(routing_id)))
+
+    def session_report(self) -> list[dict[str, Any]]:
+        """Every session that has said where it is, with what it holds.
+
+        One entry per process rather than per membership: a session with three channels has one notice socket,
+        and a reader looking for somewhere to watch wants the address once with the memberships beside it.
+        """
+        grouped: dict[int, dict[str, Any]] = {}
+        for routing_id, described in self.sessions.items():
+            if (identity := self.routing_ids.get(routing_id)) is None:
+                continue
+            entry = grouped.setdefault(described.get("pid", -1), {**described, "connections": []})
+            entry["connections"].append(
+                {"connection_id": routing_id.decode("ascii"), "channel": identity.channel, "name": identity.name}
+            )
+        return list(grouped.values())
 
     def channel_report(self) -> list[dict[str, Any]]:
         """Name, uuid and member count of every occupied channel, as answered to a `channels?` query."""
@@ -181,6 +223,8 @@ class Hat:
                 # Answered without adding the sender to any table. `list_channels` uses a throwaway DEALER, and
                 # registering it would put a non-participant into rosters and member counts.
                 self._send(source, protocol.channels(self.channel_report(), to=self._scope_of(source)))
+            case "sessions":
+                self._send(source, protocol.sessions_answer(self.session_report(), to=self._scope_of(source)))
             case unknown:
                 logger.warning("ignoring operator message %r from %r", unknown, source)
 
@@ -228,6 +272,9 @@ class Hat:
             self.by_name.pop((previous.channel, previous.name), None)
             if (old := self.channels.get(previous.channel)) is not None:
                 old.members.discard(source)
+
+        if isinstance(described := payload.get("session"), dict):
+            self.sessions[source] = described
 
         identity = Identity(channel=channel_name, name=name)
         changed = self.routing_ids.get(source) != identity
