@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Callable
 import pytest
 
 from yaac.backend import AmbiguousConnection, Backend, ConnectionRefused, NotConnected
+from yaac.protocol import Envelope
 
 FORUM = "forum"
 OTHER = "other channel"
@@ -34,11 +35,12 @@ async def heard(backend: Backend) -> list[tuple]:
     await asyncio.sleep(SETTLE)
     return [
         (
-            (m.get("from") or {}).get("name"),
-            (m.get("to") or {}).get("name") if m.get("to") else None,
-            m.get("body"),
+            envelope.frm.peer.name if envelope.frm and envelope.frm.peer else None,
+            envelope.to.peer.name if envelope.to.peer else None,
+            envelope.body,
         )
-        for m in backend.resolve(None).receive()
+        for message in backend.resolve(None).receive()
+        for envelope in [Envelope.from_wire(message)]
     ]
 
 
@@ -110,10 +112,13 @@ async def test_undeliverable_messages_bounce_to_the_sender(
     await a.resolve(None).send("anyone there?", name=recipient)
     await asyncio.sleep(SETTLE)
 
-    [bounce] = a.resolve(None).receive()
-    assert bounce["kind"] == "bounce"
-    assert bounce["from"] is None
-    assert "no such recipient" in bounce["reason"]
+    [wire] = a.resolve(None).receive()
+    bounce = Envelope.from_wire(wire)
+    # `from: {}` is the operator speaking as itself rather than carrying somebody, which is what marks a bounce as
+    # infrastructure -- and it is unforgeable, since a sender never writes `from` at all.
+    assert bounce.frm.is_the_hat
+    assert bounce.op == "bounce"
+    assert "no such recipient" in bounce.payload["reason"]
     if on_other_channel:
         # The hat takes the sender's channel from its own table, so speaking into
         # a channel you have not joined is structurally impossible.
@@ -141,11 +146,15 @@ async def test_a_body_is_delivered_verbatim_and_never_obeyed(radios: RadioFactor
     await a.resolve(None).send(body, name="bob")
     await asyncio.sleep(SETTLE)
 
-    [received] = b.resolve(None).receive()
-    assert received["body"] == body
-    assert received["from"]["name"] == "ann"
-    assert received["to"]["name"] == "bob"
-    assert "kind" not in received
+    [wire] = b.resolve(None).receive()
+    received = Envelope.from_wire(wire)
+    assert received.body == body
+    assert received.frm.peer.name == "ann"
+    assert received.to.peer.name == "bob"
+    # Carried, not obeyed: a body that looks like operator mail is still addressed to a participant, and
+    # addressing is the only thing that decides which of the two it is.
+    assert received.for_the_hat is False
+    assert received.op is None
 
 
 @pytest.mark.parametrize(
@@ -316,5 +325,5 @@ async def test_a_handle_from_another_channel_does_not_resolve(radios: RadioFacto
     await a.resolve(None).send("wrong channel", routing_id=elsewhere.connection_id)
     await asyncio.sleep(SETTLE)
     assert await heard(b) == []
-    [bounce] = a.resolve(None).receive()
-    assert bounce["kind"] == "bounce"
+    [wire] = a.resolve(None).receive()
+    assert Envelope.from_wire(wire).op == "bounce"

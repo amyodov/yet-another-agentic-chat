@@ -57,10 +57,15 @@ def utc_now() -> str:
 # Serialization ----------------------------------------------------------
 
 
-PROTOCOL_VERSION = 1
-"""Stamped onto every message as its first field. Bump when a change would confuse an older reader."""
+PROTOCOL_VERSION = 2
+"""Stamped onto every message as its first field. Bump when a change would confuse an older reader.
 
-MAGIC = b'{"yaac":1'
+Version 2 is the envelope: one message shape for chat and operator mail alike, addressing rather than frame count
+deciding what the hat reads. Version 1 is not bridged -- it was always temporary, and a peer speaking it is
+refused by name so a machine mid-upgrade is told what it is looking at rather than left with an endpoint that
+answers nothing."""
+
+MAGIC = b'{"yaac":2'
 """What a version 1 message starts with. No trailing comma: a message carrying no other field would end right here,
 so the comma is not something the format can promise."""
 
@@ -259,109 +264,6 @@ class Scope:
         return self.channel is None and self.peer is None
 
 
-# Data messages ----------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class Destination:
-    """Frame 0 of a data message: which channel, and who on it.
-
-    `to=None` broadcasts to the whole channel. The hat validates `channel` against the sender's registered channel
-    and otherwise ignores it; it is carried for logging and explicitness, never trusted.
-    """
-
-    channel: str
-    to: Address | None = None
-
-    def to_wire(self) -> dict[str, Any]:
-        return {"channel": self.channel, "to": self.to.to_wire() if self.to else None}
-
-    @classmethod
-    def from_wire(cls, value: Any) -> Destination:
-        if not isinstance(value, dict):
-            raise ValueError("a destination must be an object")
-        channel = value.get("channel")
-        if channel is not None and not isinstance(channel, str):
-            raise ValueError("destination channel must be a string or null")
-        return cls(channel=channel, to=Address.from_wire(value.get("to")))
-
-
-@dataclass(frozen=True, slots=True)
-class Envelope:
-    """What the hat delivers to a recipient.
-
-    `to` is the recipient's address for a direct message and None for a broadcast. Recipients need the difference to
-    choose a reply mode: answering a broadcast privately, or a private message publicly, reaches the wrong people.
-
-    `sender` is filled in by the hat from its routing-id table, so a participant cannot claim to be somebody else.
-    """
-
-    id: str
-    channel: str
-    sender: Address
-    to: Address | None
-    ts: str
-    body: str
-
-    def to_wire(self) -> dict[str, Any]:
-        # `dumps` preserves this order, so build the routing header first and leave `body` last: it is the only
-        # unbounded field, and `head -c` on a log should show who sent what to whom however long the bodies run.
-        return {
-            "id": self.id,
-            "ts": self.ts,
-            "channel": self.channel,
-            "from": self.sender.to_wire(),
-            "to": self.to.to_wire() if self.to else None,
-            "body": self.body,
-        }
-
-    @classmethod
-    def from_wire(cls, value: dict[str, Any]) -> Envelope:
-        sender = Address.from_wire(value.get("from"))
-        if sender is None:
-            raise ValueError("an envelope must name its sender")
-        return cls(
-            id=value["id"],
-            channel=value["channel"],
-            sender=sender,
-            to=Address.from_wire(value.get("to")),
-            ts=value["ts"],
-            body=value["body"],
-        )
-
-
-def envelope(
-    *,
-    channel: str,
-    sender: Address,
-    to: Address | None,
-    body: str,
-    msg_id: str | None = None,
-) -> dict[str, Any]:
-    """Build a delivered envelope, ready to serialize."""
-    return Envelope(
-        id=msg_id or new_ulid(),
-        channel=channel,
-        sender=sender,
-        to=to,
-        ts=utc_now(),
-        body=body,
-    ).to_wire()
-
-
-def destination(channel: str, to: Address | None = None) -> dict[str, Any]:
-    """Build a destination frame, ready to serialize. `to=None` broadcasts to the channel."""
-    return Destination(channel=channel, to=to).to_wire()
-
-
-def is_control(message: dict[str, Any]) -> bool:
-    """True if this is a control message rather than a delivered envelope."""
-    return message.get("from") is None and "kind" in message
-
-
-# Identity ---------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class Identity:
     """What the hat records for one routing id."""
@@ -377,55 +279,165 @@ class Identity:
         )
 
 
-# Control messages -------------------------------------------------------
+# Messages ---------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Envelope:
+    """Every message on the wire, whatever it is for.
+
+    `hello`, a channel listing, `whois`, a roster, a bounce and a sentence between two agents all travel in this
+    one shape. What decides whether the hat *obeys* a message or merely *carries* it is who it is addressed to,
+    not how many frames it arrived in: mail addressed to `{}` is for the operator and is the only mail it reads.
+    That is hard rule 5, restated as addressing.
+
+    `op` names what operator mail asks for or answers. Direction disambiguates the rest: `to: {}` with
+    `op: "channels"` is the question, `from: {}` with `op: "channels"` is the answer. Chat carries no `op` at all.
+
+    `from` is never written by a sender. The hat stamps it from its own routing table, which is what makes
+    `from: {}` -- the operator speaking -- unforgeable by construction rather than by validation.
+
+    `mentions` and `tags` sit here rather than inside the message, so the hat can complete a mention's address
+    from its table the way it completes `from`. A recipient then asks "am I mentioned?" by comparing routing ids
+    rather than names, which is exact where a name is ambiguous the moment it has been reused. `payload` stays
+    opaque: the hat has no business in it.
+
+    `body` and `payload` come last, so `head -c` on a log shows the routing of every message however long its
+    contents.
+    """
+
+    id: str
+    ts: str
+    to: Scope
+    frm: Scope | None = None
+    op: str | None = None
+    mentions: tuple[Address, ...] = ()
+    tags: tuple[str, ...] = ()
+    body: str | None = None
+    payload: Any = None
+
+    def to_wire(self) -> dict[str, Any]:
+        """Only what this message has. A field that appears carries a value, as everywhere else in this format."""
+        wire: dict[str, Any] = {"id": self.id, "ts": self.ts}
+        if self.frm is not None:
+            wire["from"] = self.frm.to_wire()
+        wire["to"] = self.to.to_wire()
+        if self.op is not None:
+            wire["op"] = self.op
+        if self.mentions:
+            wire["mentions"] = [m.to_wire() for m in self.mentions]
+        if self.tags:
+            wire["tags"] = list(self.tags)
+        if self.body is not None:
+            wire["body"] = self.body
+        if self.payload is not None:
+            wire["payload"] = self.payload
+        return wire
+
+    @classmethod
+    def from_wire(cls, value: Any) -> Envelope:
+        if not isinstance(value, dict):
+            raise ValueError(f"a message must be an object, got {type(value).__name__}")
+        for field_name in ("id", "ts"):
+            if not isinstance(value.get(field_name), str):
+                raise ValueError(f"message {field_name} must be a string")
+        if "to" not in value:
+            raise ValueError("a message says who it is for, even when that is the hat")
+        for field_name in ("op", "body"):
+            if field_name in value and not isinstance(value[field_name], str):
+                raise ValueError(f"message {field_name} must be a string")
+        mentions = value.get("mentions", [])
+        if not isinstance(mentions, list):
+            raise ValueError("mentions must be a list")
+        tags = value.get("tags", [])
+        if not isinstance(tags, list) or any(not isinstance(t, str) for t in tags):
+            raise ValueError("tags must be a list of strings")
+        return cls(
+            id=value["id"],
+            ts=value["ts"],
+            to=Scope.from_wire(value["to"]),
+            frm=Scope.from_wire(value["from"]) if "from" in value else None,
+            op=value.get("op"),
+            mentions=tuple(address for m in mentions if (address := Address.from_wire(m)) is not None),
+            tags=tuple(tags),
+            body=value.get("body"),
+            payload=value.get("payload"),
+        )
+
+    @property
+    def for_the_hat(self) -> bool:
+        """Whether this is mail the hat reads rather than carries."""
+        return self.to.is_the_hat
+
+
+def now() -> str:
+    """UTC to the second. Second resolution is enough to read a log by and keeps the field a fixed width."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def message(
+    to: Scope,
+    *,
+    body: str | None = None,
+    payload: Any = None,
+    mentions: tuple[Address, ...] = (),
+    tags: tuple[str, ...] = (),
+    frm: Scope | None = None,
+    op: str | None = None,
+    msg_id: str | None = None,
+) -> Envelope:
+    """Build one message. The only constructor: everything on the wire is this shape."""
+    return Envelope(
+        id=msg_id or new_ulid(),
+        ts=now(),
+        to=to,
+        frm=frm,
+        op=op,
+        mentions=mentions,
+        tags=tags,
+        body=body,
+        payload=payload,
+    )
+
+
+# Operator mail ----------------------------------------------------------
 #
-# Hat -> participant.
+# Addressed to `{}` on the way in and stamped `from: {}` on the way out. The hat reads exactly this and nothing
+# else; `op` says which question or answer it is, and the direction says which of the two.
 
 
-def whois() -> dict[str, Any]:
-    """Ask an unregistered routing id to identify itself. Sent by a hat with no entry for it."""
-    return {"from": None, "kind": "whois"}
-
-
-def roster(channel: str, peers: list[Address]) -> dict[str, Any]:
-    """Current membership of a channel. Cached by the participant; not written to any inbox."""
-    return {
-        "from": None,
-        "kind": "roster",
-        "channel": channel,
-        "peers": [p.to_wire() for p in peers],
-    }
-
-
-def bounce(msg_id: str, reason: str) -> dict[str, Any]:
-    """Report that a message could not be delivered. Written to the sender's inbox so the failure is readable."""
-    return {"from": None, "kind": "bounce", "id": msg_id, "reason": reason}
-
-
-def error(reason: str) -> dict[str, Any]:
-    """Report that a request was refused. Written to the inbox unless it answers an in-flight `hello`."""
-    return {"from": None, "kind": "error", "reason": reason}
-
-
-def channels(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Reply to `channels?`: one entry per occupied channel, each with `name`, `uuid` and member `count`."""
-    return {"from": None, "kind": "channels", "channels": entries}
-
-
-# Participant -> hat.
-
-
-def hello(channel: str, name: str, reply_to: str) -> dict[str, Any]:
+def hello(channel: str, name: str, reply_to: str) -> Envelope:
     """Claim a (channel, name) pair for this routing id."""
-    return {
-        "from": None,
-        "kind": "hello",
-        "channel": channel,
-        "name": name,
-        "reply_to": reply_to,
-    }
+    return message(Scope(), op="hello", payload={"channel": channel, "name": name, "reply_to": reply_to})
 
 
-def channels_query() -> dict[str, Any]:
-    """Request the channel list. Sent by `Backend.probe_channels`; the sender is not registered by the hat."""
-    return {"from": None, "kind": "channels?"}
+def channels_query() -> Envelope:
+    """Ask for the channel list. The sender is not registered by the hat, which is what makes looking free."""
+    return message(Scope(), op="channels")
+
+
+def channels(entries: list[dict[str, Any]], to: Scope) -> Envelope:
+    """Answer a channel listing: one entry per occupied channel, each with `name`, `uuid` and member `count`."""
+    return message(to, frm=Scope(), op="channels", payload={"channels": entries})
+
+
+def whois(to: Scope) -> Envelope:
+    """Ask an unregistered routing id to identify itself. Sent by a hat with no entry for it."""
+    return message(to, frm=Scope(), op="whois")
+
+
+def roster(channel: str, peers: list[Address], to: Scope) -> Envelope:
+    """Current membership of a channel. Cached by the participant; never written to an inbox."""
+    return message(
+        to, frm=Scope(), op="roster", payload={"channel": channel, "members": [p.to_wire() for p in peers]}
+    )
+
+
+def bounce(msg_id: str, reason: str, to: Scope) -> Envelope:
+    """Report that a message could not be delivered. Written to the sender's inbox so the failure is readable."""
+    return message(to, frm=Scope(), op="bounce", payload={"id": msg_id, "reason": reason})
+
+
+def error(reason: str, to: Scope) -> Envelope:
+    """Report that a request was refused. Written to the inbox unless it answers an in-flight `hello`."""
+    return message(to, frm=Scope(), op="error", payload={"reason": reason})

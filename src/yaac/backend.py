@@ -176,7 +176,7 @@ class Membership:
     # -- loops -----------------------------------------------------------
 
     async def _send_hello(self) -> None:
-        await self.dealer.send(protocol.dumps(protocol.hello(self.channel, self.name, self.routing_id)))
+        await self.dealer.send(protocol.dumps(protocol.hello(self.channel, self.name, self.routing_id).to_wire()))
 
     async def _monitor_loop(self) -> None:
         """Re-send `hello` whenever this DEALER reports EVENT_CONNECTED.
@@ -206,43 +206,54 @@ class Membership:
             except zmq.ZMQError, asyncio.CancelledError:
                 return
             try:
-                message = protocol.parse(frame)
+                envelope = protocol.Envelope.from_wire(protocol.parse(frame))
             except ValueError as exc:
-                logger.warning("dropping unreadable frame from the hat: %s", exc)
+                # The version is named because a mismatch is otherwise silent: an endpoint that accepts
+                # connections and answers nothing reads exactly like an empty network.
+                logger.warning("dropping unreadable frame from the hat (protocol %s): %s",
+                               protocol.peek_version(frame), exc)
                 continue
-            self._deliver(message)
+            self._deliver(envelope)
 
-    def _deliver(self, message: dict[str, Any]) -> None:
-        """Apply one message: write it to the inbox, update the roster cache, or resolve a pending hello."""
-        if not protocol.is_control(message):
-            self._append(message)
+    def _deliver(self, envelope: protocol.Envelope) -> None:
+        """Apply one message: write it to the inbox, update the roster cache, or resolve a pending hello.
+
+        Operator mail is what arrives stamped `from: {}` -- the hat speaking as itself rather than carrying
+        somebody. What this side does with it is backend policy, not a second format: a roster goes to the cache,
+        a bounce goes to the inbox.
+        """
+        if envelope.frm is None or not envelope.frm.is_the_hat:
+            self._append(envelope.to_wire())
             return
 
-        match message.get("kind"):
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        match envelope.op:
             case "whois":
                 # Sent by a hat whose table does not contain this routing id, typically one elected moments ago.
                 self._spawn(self._send_hello(), f"yaac-whois-{self.routing_id}")
             case "roster":
                 # Cached for `peers()`. Not written to the inbox: membership changes are not messages, and inboxing
                 # them would put a line into the agent's context every time any participant reconnected.
-                if message.get("channel") == self.channel:
+                if payload.get("channel") == self.channel:
                     self.roster = [
-                        address for peer in message.get("peers", []) if (address := Address.from_wire(peer)) is not None
+                        address
+                        for peer in payload.get("members", [])
+                        if (address := Address.from_wire(peer)) is not None
                     ]
                     self._changed()
                     if self._hello_ack is not None and not self._hello_ack.done():
                         self._hello_ack.set_result(True)
             case "error":
-                reason = message.get("reason", "refused")
+                reason = payload.get("reason", "refused")
                 if self._hello_ack is not None and not self._hello_ack.done():
                     self._hello_ack.set_exception(ConnectionRefused(reason))
                 else:
-                    self._append(message)
+                    self._append(envelope.to_wire())
             case "bounce":
-                # Written to the inbox so an undeliverable message is visible to the agent rather than silently lost.
-                self._append(message)
+                # Written to the inbox so an undeliverable message is visible to the agent rather than lost.
+                self._append(envelope.to_wire())
             case other:
-                logger.warning("ignoring control message %r from the hat", other)
+                logger.warning("ignoring operator message %r from the hat", other)
 
     def _append(self, message: dict[str, Any]) -> None:
         self.inbox.append(message)
@@ -261,20 +272,36 @@ class Membership:
 
     # -- operations ------------------------------------------------------
 
-    async def send(self, body: str, name: str | None = None, routing_id: str | None = None) -> str:
+    async def send(
+        self,
+        body: str,
+        name: str | None = None,
+        routing_id: str | None = None,
+        payload: Any = None,
+        mentions: tuple[Address, ...] = (),
+        tags: tuple[str, ...] = (),
+    ) -> str:
         """Queue one message for the hat. Does not block.
 
         Naming neither a name nor a routing_id addresses every other member of the channel. Sent with NOBLOCK, so
         reaching SNDHWM raises `zmq.Again` rather than waiting; blocking here would stall the MCP call and with it
         the user's session.
+
+        `from` is not written: the hat stamps it from its own table, which is the whole of hard rule 6.
         """
-        to = Address(name=name, routing_id=routing_id) if (name or routing_id) else None
-        destination = protocol.dumps(protocol.destination(self.channel, to))
+        peer = Address(name=name, routing_id=routing_id) if (name or routing_id) else None
+        envelope = protocol.message(
+            protocol.Scope(channel=self.channel, peer=peer),
+            body=body,
+            payload=payload,
+            mentions=mentions,
+            tags=tags,
+        )
         try:
-            await self.dealer.send_multipart([destination, body.encode("utf-8")], zmq.NOBLOCK)
+            await self.dealer.send(protocol.dumps(envelope.to_wire()), zmq.NOBLOCK)
         except zmq.Again:
             raise RuntimeError("send queue is full -- the hat is not keeping up") from None
-        return protocol.new_ulid()
+        return envelope.id
 
     def receive(self) -> list[dict[str, Any]]:
         """Take everything received since the last call, emptying the inbox."""
@@ -366,7 +393,7 @@ class Backend:
         probe.setsockopt(zmq.ROUTING_ID, protocol.new_ulid().encode("ascii"))
         try:
             probe.connect(self.endpoint)
-            await probe.send(protocol.dumps(protocol.channels_query()))
+            await probe.send(protocol.dumps(protocol.channels_query().to_wire()))
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout
             while (remaining := deadline - loop.time()) > 0:
@@ -375,8 +402,11 @@ class Backend:
                 except TimeoutError:
                     return None
                 with contextlib.suppress(ValueError):
-                    if (message := protocol.parse(frame)).get("kind") == "channels":
-                        return message.get("channels", [])
+                    answer = protocol.Envelope.from_wire(protocol.parse(frame))
+                    # `to: {}` asked; `from: {}` answers. Direction is what tells the question from the reply.
+                    if answer.op == "channels" and answer.frm is not None and answer.frm.is_the_hat:
+                        payload = answer.payload if isinstance(answer.payload, dict) else {}
+                        return payload.get("channels", [])
             return None
         finally:
             probe.close()

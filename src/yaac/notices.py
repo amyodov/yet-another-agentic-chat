@@ -23,6 +23,8 @@ import socket
 from collections.abc import Callable
 from typing import Any
 
+from .protocol import Envelope
+
 SESSION_ENV = ("YAAC_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
 """Names under which this process may already know which session it belongs to, best first.
 
@@ -69,16 +71,14 @@ def ports_for(key: str) -> list[int]:
 
 def describe_arrival(channel: str, name: str, message: dict[str, Any]) -> str:
     """One line about one arrival, naming no body and no unbounded field it cannot afford."""
-    match message:
-        case {"kind": "bounce"}:
-            kind = "a bounce"
-        case {"kind": "error"}:
-            kind = "a refusal"
-        case {"to": to} if to:
-            kind = "a whisper"
-        case _:
-            kind = "a broadcast"
-    sender = (message.get("from") or {}).get("name") or "someone"
+    envelope = Envelope.from_wire(message)
+    if envelope.frm is not None and envelope.frm.is_the_hat:
+        kind = {"bounce": "a bounce", "error": "a refusal"}.get(envelope.op or "", "operator mail")
+    elif envelope.to.peer is not None:
+        kind = "a whisper"
+    else:
+        kind = "a broadcast"
+    sender = (envelope.frm.peer.name if envelope.frm and envelope.frm.peer else None) or "someone"
     line = f"1 new: {kind} on {channel!r} to you as {name!r}, from {sender!r} -- call check_inbox"
     return line if len(line) <= NOTICE_LIMIT else "1 new -- call check_inbox"
 

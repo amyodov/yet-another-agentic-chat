@@ -15,14 +15,32 @@ from typing import Any
 
 import pytest
 
-from yaac import frontend
+from yaac import frontend, protocol
 from yaac import hook as yaac_hook
 from yaac.backend import Backend
+from yaac.protocol import Address, Scope
 
 FORUM = "forum"
 SETTLE = 0.4  # generous for loopback TCP, short enough to keep the suite quick
 
 RadioFactory = Callable[[], Backend]
+
+
+def aloud(sender: str, body: str, **kwargs) -> dict[str, Any]:
+    """A broadcast as the hat would have handed it over, built by the real constructors so these cases cannot
+    drift from what the wire carries."""
+    return protocol.message(
+        Scope(channel=FORUM), frm=Scope(channel=FORUM, peer=Address(sender)), body=body, **kwargs
+    ).to_wire()
+
+
+def whispered(sender: str, recipient: str, body: str) -> dict[str, Any]:
+    return protocol.message(
+        Scope(channel=FORUM, peer=Address(recipient)),
+        frm=Scope(channel=FORUM, peer=Address(sender)),
+        body=body,
+    ).to_wire()
+
 
 
 @pytest.fixture
@@ -140,15 +158,25 @@ async def test_a_whisper_is_told_apart_from_a_broadcast(radios: RadioFactory) ->
 @pytest.mark.parametrize(
     "message,line",
     [
-        ({"from": {"name": "bob"}, "to": None, "body": "hello"}, "  · bob → everyone: hello"),
-        ({"from": {"name": "bob"}, "to": {"name": "ann"}, "body": "psst"}, "  · bob → you: psst"),
-        ({"from": None, "to": None, "body": "orphan"}, "  · someone → everyone: orphan"),
-        ({"from": {"name": "Колян"}, "to": None, "body": "привет"}, "  · Колян → everyone: привет"),
-        ({"from": {"name": "bob"}, "to": None, "body": "a\nb"}, "  · bob → everyone: a\nb"),
-        ({"kind": "bounce", "id": "01J", "reason": "no such recipient"}, "  · undelivered: no such recipient"),
-        ({"kind": "error", "reason": "name taken"}, "  · refused: name taken"),
+        (aloud("bob", "hello"), "  · bob → everyone: hello"),
+        (whispered("bob", "ann", "psst"), "  · bob → you: psst"),
+        (protocol.message(Scope(channel=FORUM), body="orphan").to_wire(), "  · someone → everyone: orphan"),
+        (aloud("Колян", "привет"), "  · Колян → everyone: привет"),
+        (aloud("bob", "a\nb"), "  · bob → everyone: a\nb"),
+        (
+            aloud("bob", "who owns this?", mentions=(Address("ann"),)),
+            "  · bob → everyone (calling on ann): who owns this?",
+        ),
+        (
+            protocol.bounce("01J", "no such recipient", to=Scope(peer=Address("ann"))).to_wire(),
+            "  · undelivered: no such recipient",
+        ),
+        (
+            protocol.error("name taken", to=Scope(peer=Address("ann"))).to_wire(),
+            "  · refused: name taken",
+        ),
     ],
-    ids=["broadcast", "whisper", "no-sender", "non-ascii", "newline", "bounce", "error"],
+    ids=["broadcast", "whisper", "no-sender", "non-ascii", "newline", "mention", "bounce", "error"],
 )
 def test_every_kind_of_inbox_entry_has_a_line(message: dict[str, Any], line: str) -> None:
     """Bounces and refusals sit in the same inbox as messages and matter as much -- a send that failed is news."""
@@ -159,7 +187,7 @@ def test_a_body_is_delivered_whole(radios) -> None:
     """Nothing is trimmed, because the messages are taken from the inbox as they are shown: anything held back
     would be held back for good, where check_inbox would have handed over all of it."""
     body = "x" * 50_000
-    assert frontend._shown({"from": {"name": "bob"}, "to": None, "body": body}).endswith(body)
+    assert frontend._shown(aloud("bob", body)).endswith(body)
 
 
 @pytest.mark.parametrize(

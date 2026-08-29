@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from yaac import protocol
-from yaac.protocol import MAGIC, PROTOCOL_VERSION, Address, Destination, Envelope, Scope
+from yaac.protocol import MAGIC, PROTOCOL_VERSION, Address, Envelope, Scope
 
 # Text that has broken naive implementations. Names are raw UTF-8 and are never
 # parsed, split, validated, or case-folded, so all of these must survive intact.
@@ -61,96 +61,127 @@ def test_ulid_properties() -> None:
 
 @AWKWARD_TEXT
 def test_arbitrary_text_survives_the_wire_unchanged(text: str) -> None:
-    where = Destination.from_wire(protocol.loads(protocol.dumps(protocol.destination(text, Address(text, text)))))
-    assert where == Destination(channel=text, to=Address(name=text, routing_id=text))
-
-    sent = protocol.envelope(channel=text, sender=Address(text, "01H"), to=Address(text, "01T"), body=text)
-    restored = Envelope.from_wire(protocol.loads(protocol.dumps(sent)))
-    assert (restored.channel, restored.sender.name, restored.to.name, restored.body) == (
+    """Channel and participant names are user-chosen UTF-8 and pass through untouched, and so does a body that
+    happens to look like operator mail -- what makes the hat read a message is who it is addressed to, never what
+    it says."""
+    sent = protocol.message(
+        Scope(channel=text, peer=Address(text, "01T")),
+        frm=Scope(channel=text, peer=Address(text, "01H")),
+        body=text,
+        tags=(text,),
+    )
+    restored = Envelope.from_wire(protocol.loads(protocol.dumps(sent.to_wire())))
+    assert restored == sent
+    assert (restored.to.channel, restored.to.peer.name, restored.frm.peer.name, restored.body) == (
         text,
         text,
         text,
         text,
     )
-
-    # No name is reserved, so text that looks like control traffic is not.
-    assert protocol.is_control(sent) is False
+    assert restored.for_the_hat is False
 
 
 @pytest.mark.parametrize(
-    "to,expected",
-    [(Address("bob", "01B"), {"name": "bob", "zmq_routing_id": "01B"}), (None, None)],
-    ids=["direct", "broadcast"],
+    "peer,expected",
+    [(Address("Bob", "01B"), {"channel": "forum", "peer": {"name": "Bob", "zmq_routing_id": "01B"}}),
+     (None, {"channel": "forum"})],
+    ids=["whisper", "broadcast"],
 )
-def test_envelope_records_how_it_was_addressed(to: Address | None, expected: Any) -> None:
-    # Recipients must tell the two apart: answering privately to something everyone heard, or the reverse, reaches
-    # the wrong people.
-    sent = protocol.envelope(channel="forum", sender=Address("ann", "01A"), to=to, body="hi")
-    assert sent["to"] == expected
-    assert sent["from"] == {"name": "ann", "zmq_routing_id": "01A"}
-    assert sent["channel"] == "forum"
-    assert len(sent["id"]) == 26
-    assert sent["ts"].endswith("Z")
+def test_a_message_records_how_it_was_addressed(peer: Address | None, expected: Any) -> None:
+    """Recipients must tell the two apart: answering privately to something everyone heard, or the reverse,
+    reaches the wrong people."""
+    sent = protocol.message(
+        Scope(channel="forum", peer=peer), frm=Scope(channel="forum", peer=Address("Alice", "01A")), body="hi"
+    )
+    wire = sent.to_wire()
+    assert wire["to"] == expected
+    assert wire["from"] == {"channel": "forum", "peer": {"name": "Alice", "zmq_routing_id": "01A"}}
+    assert len(wire["id"]) == 26
+    assert wire["ts"].endswith("Z")
+
+
+def test_mentions_and_tags_ride_beside_the_addressing_not_inside_the_message() -> None:
+    """Which is what lets the hat complete a mention from its own table without reading a body: rule 5 is about
+    what a message says, and these say who is called on rather than what was said."""
+    sent = protocol.message(
+        Scope(channel="forum"),
+        body="who owns the migration?",
+        mentions=(Address("Bob"), Address("Carol", "01C")),
+        tags=("build", "urgent"),
+    )
+    wire = sent.to_wire()
+    assert wire["mentions"] == [{"name": "Bob"}, {"name": "Carol", "zmq_routing_id": "01C"}]
+    assert wire["tags"] == ["build", "urgent"]
+    assert Envelope.from_wire(wire) == sent
+    # Nothing empty is written: a message with no mentions carries no key for them.
+    assert "mentions" not in protocol.message(Scope(channel="forum"), body="hi").to_wire()
+
+
+PEER = Scope(peer=Address("Alice", "01A"))
 
 
 @pytest.mark.parametrize(
     "message,expected",
     [
-        (protocol.whois(), {"from": None, "kind": "whois"}),
         (
-            protocol.roster("forum", [Address("ann", "01A"), Address("bob", "01B")]),
-            {
-                "from": None,
-                "kind": "roster",
-                "channel": "forum",
-                "peers": [
-                    {"name": "ann", "zmq_routing_id": "01A"},
-                    {"name": "bob", "zmq_routing_id": "01B"},
-                ],
-            },
+            protocol.hello("forum", "Alice", "01J"),
+            {"op": "hello", "payload": {"channel": "forum", "name": "Alice", "reply_to": "01J"}},
         ),
-        (
-            protocol.bounce("01J", "no such name on this channel"),
-            {
-                "from": None,
-                "kind": "bounce",
-                "id": "01J",
-                "reason": "no such name on this channel",
-            },
-        ),
-        (
-            protocol.error("name taken on this channel"),
-            {"from": None, "kind": "error", "reason": "name taken on this channel"},
-        ),
-        (
-            protocol.channels([{"name": "forum", "uuid": "01J", "count": 2}]),
-            {
-                "from": None,
-                "kind": "channels",
-                "channels": [{"name": "forum", "uuid": "01J", "count": 2}],
-            },
-        ),
-        (
-            protocol.hello("forum", "ann", "01J"),
-            {
-                "from": None,
-                "kind": "hello",
-                "channel": "forum",
-                "name": "ann",
-                "reply_to": "01J",
-            },
-        ),
-        (protocol.channels_query(), {"from": None, "kind": "channels?"}),
+        (protocol.channels_query(), {"op": "channels"}),
     ],
-    ids=["whois", "roster", "bounce", "error", "channels", "hello", "channels?"],
+    ids=["hello", "channels?"],
 )
-def test_control_messages_have_exactly_the_documented_shape(message: dict[str, Any], expected: Any) -> None:
-    # Control traffic is identified by a null sender rather than a reserved name, because a user may
-    # legitimately choose any string as one.
-    assert message == expected
-    assert protocol.is_control(message) is True
+def test_mail_to_the_hat_is_addressed_to_nobody(message: protocol.Envelope, expected: dict) -> None:
+    """A question for the operator is `to: {}` and carries no `from` at all -- senders never write one. What
+    makes the hat read this rather than carry it is the addressing, which is hard rule 5 restated."""
+    wire = message.to_wire()
+    assert message.for_the_hat is True
+    assert wire["to"] == {}
+    assert "from" not in wire
+    assert {k: v for k, v in wire.items() if k in ("op", "payload")} == expected
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        (protocol.whois(to=PEER), {"op": "whois"}),
+        (
+            protocol.roster("forum", [Address("Alice", "01A"), Address("Bob", "01B")], to=PEER),
+            {
+                "op": "roster",
+                "payload": {
+                    "channel": "forum",
+                    "members": [{"name": "Alice", "zmq_routing_id": "01A"}, {"name": "Bob", "zmq_routing_id": "01B"}],
+                },
+            },
+        ),
+        (
+            protocol.bounce("01J", "no such recipient on this channel", to=PEER),
+            {"op": "bounce", "payload": {"id": "01J", "reason": "no such recipient on this channel"}},
+        ),
+        (
+            protocol.error("name taken on this channel", to=PEER),
+            {"op": "error", "payload": {"reason": "name taken on this channel"}},
+        ),
+        (
+            protocol.channels([{"name": "forum", "uuid": "01J", "count": 2}], to=PEER),
+            {"op": "channels", "payload": {"channels": [{"name": "forum", "uuid": "01J", "count": 2}]}},
+        ),
+    ],
+    ids=["whois", "roster", "bounce", "error", "channels"],
+)
+def test_the_hat_answers_as_itself(message: protocol.Envelope, expected: dict) -> None:
+    """`from: {}` is the operator speaking rather than carrying somebody, and it is unforgeable because a sender
+    never writes `from` at all -- the hat stamps every one it relays.
+
+    Direction is what tells a question from its answer: `to: {}` asked, `from: {}` replies, and `op` is the same
+    word in both."""
+    wire = message.to_wire()
+    assert wire["from"] == {}
+    assert message.for_the_hat is False  # it is addressed to a participant, not to the operator
+    assert {k: v for k, v in wire.items() if k in ("op", "payload")} == expected
     # dumps stamps the version, so what comes back is the message plus its magic field.
-    assert protocol.loads(protocol.dumps(message)) == {"yaac": PROTOCOL_VERSION, **expected}
+    assert protocol.loads(protocol.dumps(wire)) == {"yaac": PROTOCOL_VERSION, **wire}
 
 
 @pytest.mark.parametrize(
@@ -172,7 +203,9 @@ def test_equal_messages_serialize_to_equal_bytes(text: str) -> None:
     """A message has one identity, which is what a hash or signature would be computed over."""
 
     def build():
-        return protocol.envelope(channel=text, sender=Address(text, "01A"), to=None, body=text, msg_id="01M")
+        return protocol.message(
+            Scope(channel=text), frm=Scope(channel=text, peer=Address(text, "01A")), body=text, msg_id="01M"
+        ).to_wire()
 
     first, second = protocol.dumps(build()), protocol.dumps(build())
     assert first == second
@@ -184,21 +217,20 @@ def test_equal_messages_serialize_to_equal_bytes(text: str) -> None:
 @pytest.mark.parametrize(
     "message",
     [
-        protocol.envelope(channel="forum", sender=Address("ann"), to=None, body="hi"),
-        protocol.whois(),
-        protocol.roster("forum", [Address("ann", "01A")]),
-        protocol.bounce("01J", "gone"),
-        protocol.error("refused"),
-        protocol.channels([{"name": "forum", "uuid": "01J", "count": 1}]),
-        protocol.hello("forum", "ann", "01J"),
+        protocol.message(Scope(channel="forum"), body="hi"),
+        protocol.whois(to=PEER),
+        protocol.roster("forum", [Address("Alice", "01A")], to=PEER),
+        protocol.bounce("01J", "gone", to=PEER),
+        protocol.error("refused", to=PEER),
+        protocol.channels([{"name": "forum", "uuid": "01J", "count": 1}], to=PEER),
+        protocol.hello("forum", "Alice", "01J"),
         protocol.channels_query(),
-        protocol.destination("forum", Address("bob")),
     ],
-    ids=["envelope", "whois", "roster", "bounce", "error", "channels", "hello", "channels?", "destination"],
+    ids=["chat", "whois", "roster", "bounce", "error", "channels", "hello", "channels?"],
 )
-def test_every_message_begins_with_the_magic_number(message: dict[str, Any]) -> None:
+def test_every_message_begins_with_the_magic_number(message: protocol.Envelope) -> None:
     """A reader can identify a YAAC message, and the version that wrote it, from the first bytes alone."""
-    encoded = protocol.dumps(message)
+    encoded = protocol.dumps(message.to_wire())
     assert encoded.startswith(MAGIC)
     assert encoded.startswith(protocol.MAGIC_PREFIX)
     assert protocol.parse(encoded)["yaac"] == PROTOCOL_VERSION
@@ -206,15 +238,15 @@ def test_every_message_begins_with_the_magic_number(message: dict[str, Any]) -> 
 
 def test_the_magic_claims_no_trailing_comma() -> None:
     """A message carrying nothing but the version would end right after it, so the comma cannot be promised."""
-    assert MAGIC == b'{"yaac":1'
-    assert protocol.dumps({}) == b'{"yaac":1}'
+    assert MAGIC == b'{"yaac":2'
+    assert protocol.dumps({}) == b'{"yaac":2}'
     assert protocol.dumps({}).startswith(MAGIC)
 
 
 @pytest.mark.parametrize(
     "message",
-    [{}, {"yaac": 2}, {"yaac": 0}, {"yaac": "1"}, {"yaac": None}, {"yaac": 1.0}, {"yaac": True}],
-    ids=["missing", "newer", "older", "string", "null", "float", "bool"],
+    [{}, {"yaac": 3}, {"yaac": 1}, {"yaac": "2"}, {"yaac": None}, {"yaac": 2.0}, {"yaac": True}],
+    ids=["missing", "newer", "version-1", "string", "null", "float", "bool"],
 )
 def test_a_frame_this_build_cannot_read_is_rejected(message: dict[str, Any]) -> None:
     """Validation reads the parsed field rather than the leading bytes: that is what the format guarantees."""
@@ -236,7 +268,11 @@ def test_a_frame_that_is_not_an_object_is_rejected(frame: bytes) -> None:
 def test_the_version_leads_and_the_body_trails() -> None:
     """`head -c` on a log must show the routing of every message, however long the bodies are."""
     encoded = protocol.dumps(
-        protocol.envelope(channel="forum", sender=Address("ann", "01A"), to=Address("bob", "01B"), body="x" * 5000)
+        protocol.message(
+            Scope(channel="forum", peer=Address("Bob", "01B")),
+            frm=Scope(channel="forum", peer=Address("Alice", "01A")),
+            body="x" * 5000,
+        ).to_wire()
     ).decode("utf-8")
     assert encoded.index('"yaac"') == 1
     # body is the only unbounded field, so everything routing-related precedes it.
@@ -245,7 +281,7 @@ def test_the_version_leads_and_the_body_trails() -> None:
 
 def test_an_envelope_serializes_to_one_line_whatever_the_body_contains() -> None:
     body = 'first\nsecond\ttabbed\n\n"quoted" and \\backslash'
-    line = protocol.dumps(protocol.envelope(channel="forum", sender=Address("ann"), to=None, body=body))
+    line = protocol.dumps(protocol.message(Scope(channel="forum"), body=body).to_wire())
     assert line.count(b"\n") == 0  # newlines survive as escapes, so the JSONL framing holds
     assert Envelope.from_wire(protocol.loads(line)).body == body
 

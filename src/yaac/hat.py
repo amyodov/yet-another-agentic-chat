@@ -29,7 +29,7 @@ from typing import Any
 import zmq
 
 from . import protocol
-from .protocol import Address, Identity
+from .protocol import Address, Identity, Scope
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class ChannelInfo:
 class Held:
     """A data message held while a `whois` for its sender is outstanding. `at` is a `time.monotonic()` reading."""
 
-    dest_frame: bytes
+    envelope: protocol.Envelope
     body: bytes
     at: float
 
@@ -70,14 +70,14 @@ class Hat:
 
     # -- transmission ----------------------------------------------------
 
-    def _send(self, routing_id: bytes, message: dict[str, Any]) -> bool:
+    def _send(self, routing_id: bytes, message: protocol.Envelope) -> bool:
         """Send one message to a routing id.
 
         Returns False and evicts it when the ROUTER reports the peer unreachable. This is the only place a
         departure is detected, since `ROUTER_NOTIFY` disconnect events are unavailable.
         """
         try:
-            self.router.send_multipart([routing_id, protocol.dumps(message)], zmq.NOBLOCK)
+            self.router.send_multipart([routing_id, protocol.dumps(message.to_wire())], zmq.NOBLOCK)
             return True
         except zmq.ZMQError as exc:
             if exc.errno in (zmq.EHOSTUNREACH, zmq.EAGAIN):
@@ -92,7 +92,7 @@ class Hat:
         A connected participant replies with `hello`, which `_hello` treats as idempotent. A departed one raises
         `EHOSTUNREACH` inside `_send`, which evicts it and returns False.
         """
-        return self._send(routing_id, protocol.whois())
+        return self._send(routing_id, protocol.whois(to=Scope(peer=Address(routing_id=routing_id.decode()))))
 
     # -- membership ------------------------------------------------------
 
@@ -128,9 +128,9 @@ class Hat:
     def broadcast_roster(self, channel_name: str) -> None:
         """Send every member of a channel the current name list. Participants cache it; it is not written to
         inboxes."""
-        message = protocol.roster(channel_name, self.addresses(channel_name))
+        members = self.addresses(channel_name)
         for routing_id in self.members(channel_name):
-            self._send(routing_id, message)
+            self._send(routing_id, protocol.roster(channel_name, members, to=self._scope_of(routing_id)))
 
     def channel_report(self) -> list[dict[str, Any]]:
         """Name, uuid and member count of every occupied channel, as answered to a `channels?` query."""
@@ -139,47 +139,57 @@ class Hat:
     # -- inbound ---------------------------------------------------------
 
     def handle_frames(self, frames: list[bytes]) -> None:
-        """Dispatch one multipart message received on the ROUTER socket.
+        """Dispatch one message received on the ROUTER socket.
 
-        Frame 0 is the sender's routing id, set by libzmq from the connection rather than from message content, so it
-        identifies the sender reliably. A single remaining frame is a control message; two are a data message's
-        destination and body.
+        Frame 0 is the sender's routing id, set by libzmq from the connection rather than from message content, so
+        it identifies the sender reliably. Frame 1 is the whole message, whatever it is: what decides between
+        obeying and carrying is who it is addressed to, not how many frames arrived.
         """
         source, *rest = frames
-        match rest:
-            case [single]:
-                try:
-                    message = protocol.parse(single)
-                except ValueError as exc:
-                    logger.warning("dropping unreadable control frame from %r: %s", source, exc)
-                    return
-                self._control(source, message)
-            case [dest_frame, body]:
-                self._data(source, dest_frame, body)
-            case _:
-                logger.warning("dropping %d-frame message from %r", len(rest), source)
+        if len(rest) != 1:
+            logger.warning("dropping %d-frame message from %r", len(rest), source)
+            return
+        try:
+            envelope = protocol.Envelope.from_wire(protocol.parse(rest[0]))
+        except ValueError as exc:
+            # Naming the version turns "an endpoint that answers nothing" into a sentence somebody can act on.
+            seen = protocol.peek_version(rest[0])
+            logger.warning("dropping unreadable message from %r (protocol %s): %s", source, seen, exc)
+            return
+        if envelope.for_the_hat:
+            self._operator(source, envelope)
+        else:
+            self._relay(source, envelope)
 
-    def _control(self, source: bytes, message: dict[str, Any]) -> None:
-        match message.get("kind"):
+    def _scope_of(self, routing_id: bytes) -> Scope:
+        """How to address one routing id, with whatever this table knows about it."""
+        if (identity := self.routing_ids.get(routing_id)) is not None:
+            return Scope(channel=identity.channel, peer=identity.address(routing_id))
+        return Scope(peer=Address(routing_id=routing_id.decode()))
+
+    def _operator(self, source: bytes, envelope: protocol.Envelope) -> None:
+        """The only mail the hat reads. Hard rule 5, restated: obedience is decided by addressing."""
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        match envelope.op:
             case "hello":
-                self._hello(source, message)
-            case "channels?":
-                # Answer without adding the sender to any table. `list_channels` uses a throwaway DEALER, and
+                self._hello(source, payload)
+            case "channels":
+                # Answered without adding the sender to any table. `list_channels` uses a throwaway DEALER, and
                 # registering it would put a non-participant into rosters and member counts.
-                self._send(source, protocol.channels(self.channel_report()))
+                self._send(source, protocol.channels(self.channel_report(), to=self._scope_of(source)))
             case unknown:
-                logger.warning("ignoring control message %r from %r", unknown, source)
+                logger.warning("ignoring operator message %r from %r", unknown, source)
 
-    def _hello(self, source: bytes, message: dict[str, Any]) -> None:
+    def _hello(self, source: bytes, payload: dict[str, Any]) -> None:
         """Bind a (channel, name) pair to a routing_id.
 
         Participants send this on every DEALER connect, so it must be idempotent: after a hat changeover all of them
         re-announce at once and most are restating an identity this table already holds.
         """
-        channel_name = message.get("channel")
-        name = message.get("name")
+        channel_name = payload.get("channel")
+        name = payload.get("name")
         if not isinstance(channel_name, str) or not isinstance(name, str):
-            self._send(source, protocol.error("hello needs a channel and a name"))
+            self._send(source, protocol.error("hello needs a channel and a name", to=self._scope_of(source)))
             return
 
         key = (channel_name, name)
@@ -189,7 +199,7 @@ class Hat:
             # longer has a live connection -- typically a session killed while its TCP connection was still open --
             # which would otherwise block the user from reusing their own name.
             if self._reachable(incumbent):
-                self._send(source, protocol.error("name taken on this channel"))
+                self._send(source, protocol.error("name taken on this channel", to=self._scope_of(source)))
                 return
             logger.info("evicted unreachable incumbent for %r", key)
 
@@ -214,34 +224,28 @@ class Hat:
         self._flush_pending(source)
         self.broadcast_roster(channel_name)
 
-    def _data(self, source: bytes, dest_frame: bytes, body: bytes) -> None:
-        """Route one data message. The sender's channel is read from `routing_ids`, not from the destination frame."""
+    def _relay(self, source: bytes, envelope: protocol.Envelope) -> None:
+        """Carry one message to whoever its scope names. The sender's channel comes from `routing_ids`, never from
+        the message: that is what makes addressing a channel you have not joined impossible rather than forbidden.
+        """
         if (identity := self.routing_ids.get(source)) is None:
-            self._hold(source, dest_frame, body)
+            self._hold(source, envelope)
             return
 
-        try:
-            destination = protocol.Destination.from_wire(protocol.parse(dest_frame))
-        except ValueError as exc:
-            logger.warning("dropping unreadable destination from %r: %s", source, exc)
+        scope = envelope.to
+        # A named channel is checked against the sender's own and otherwise unused. Targets are always resolved
+        # inside `identity.channel`, so naming another one here changes nothing -- it is refused for clarity.
+        if scope.channel is not None and scope.channel != identity.channel:
+            self._send(source, protocol.error(f"you are not on channel {scope.channel!r}", to=self._scope_of(source)))
             return
 
-        # `channel` in the destination frame is checked against the sender's registered channel and otherwise
-        # unused. Because targets are always resolved within `identity.channel`, a participant cannot address a channel
-        # it
-        # has not joined even if it names one here.
-        if destination.channel is not None and destination.channel != identity.channel:
-            self._send(source, protocol.error(f"you are not on channel {destination.channel!r}"))
-            return
-
-        message_id = protocol.new_ulid()
-        recipient = destination.to
+        recipient = scope.peer
         if recipient is None:
             targets = self.members(identity.channel) - {source}
-            to_address = None
+            to_scope = Scope(channel=identity.channel)
         else:
-            # A recipient may be named by either locator. The routing_id is checked first: it identifies one connection
-            # and is never reused, whereas a name is only unique while its holder is connected.
+            # Either locator names a recipient. The routing id is tried first: it identifies one connection and is
+            # never reused, where a name is unique only while its holder is connected.
             target = None
             if recipient.routing_id is not None:
                 candidate = recipient.routing_id.encode("ascii")
@@ -250,47 +254,73 @@ class Hat:
             if target is None and recipient.name is not None:
                 target = self.by_name.get((identity.channel, recipient.name))
             if target is None:
-                self._send(source, protocol.bounce(message_id, "no such recipient on this channel"))
+                self._send(
+                    source,
+                    protocol.bounce(envelope.id, "no such recipient on this channel", to=self._scope_of(source)),
+                )
                 return
             targets = {target}
-            to_address = self.routing_ids[target].address(target)
+            to_scope = Scope(channel=identity.channel, peer=self.routing_ids[target].address(target))
 
-        envelope = protocol.envelope(
-            channel=identity.channel,
-            sender=identity.address(source),
-            to=to_address,
-            body=body.decode("utf-8", errors="replace"),
-            msg_id=message_id,
+        carried = protocol.message(
+            to_scope,
+            frm=Scope(channel=identity.channel, peer=identity.address(source)),
+            body=envelope.body,
+            payload=envelope.payload,
+            mentions=self._complete(identity.channel, envelope.mentions),
+            tags=envelope.tags,
+            msg_id=envelope.id,
         )
         for routing_id in targets:
-            if not self._send(routing_id, envelope) and recipient is not None:
-                # The recipient's routing_id became unreachable between target lookup and send. Only direct messages
-                # bounce: a broadcast that fails for one member still reached the others.
-                self._send(source, protocol.bounce(message_id, "recipient went away"))
+            if not self._send(routing_id, carried) and recipient is not None:
+                # The recipient became unreachable between lookup and send. Only a directed message bounces: a
+                # broadcast that failed for one member still reached the others.
+                self._send(source, protocol.bounce(envelope.id, "recipient went away", to=self._scope_of(source)))
+
+    def _complete(self, channel_name: str, mentions: tuple[Address, ...]) -> tuple[Address, ...]:
+        """Fill in what this table knows about each mentioned participant.
+
+        A mention is social, not delivery: it says who is called on to react, while everyone in scope still hears
+        it. Completing the address lets a recipient answer "am I mentioned?" by comparing routing ids, which is
+        exact where a name is ambiguous the moment it has been reused. A mention naming somebody absent is carried
+        as written -- a bounce is about delivery, and *"Bob, if you are here"* is a normal thing to say.
+        """
+        completed = []
+        for mention in mentions:
+            target = None
+            if mention.routing_id is not None:
+                target = mention.routing_id.encode("ascii")
+            elif mention.name is not None:
+                target = self.by_name.get((channel_name, mention.name))
+            if target is not None and (identity := self.routing_ids.get(target)) is not None:
+                completed.append(identity.address(target))
+            else:
+                completed.append(mention)
+        return tuple(completed)
 
     # -- whois -----------------------------------------------------------
 
-    def _hold(self, source: bytes, dest_frame: bytes, body: bytes) -> None:
-        """Hold a message from an unregistered routing id and send that routing_id a `whois`.
+    def _hold(self, source: bytes, envelope: protocol.Envelope) -> None:
+        """Hold a message from an unregistered routing id and ask that routing id who it is.
 
-        Holding rather than bouncing means a send issued during a hat changeover is delivered late instead of
-        failing, so the caller sees no error. `_flush_pending` replays these once `hello` arrives.
+        Holding rather than bouncing means a send issued during a hat changeover arrives late instead of failing,
+        so the caller sees no error. `_flush_pending` replays these once `hello` arrives.
         """
         held = self.pending.setdefault(source, [])
         now = time.monotonic()
         held[:] = [h for h in held if now - h.at < PENDING_MAX_AGE_SECONDS]
 
         if len(held) >= PENDING_MAX_PER_PARTICIPANT:
-            self._send(source, protocol.bounce(protocol.new_ulid(), "sender not identified"))
+            self._send(source, protocol.bounce(envelope.id, "sender not identified", to=self._scope_of(source)))
             return
 
-        held.append(Held(dest_frame=dest_frame, body=body, at=now))
+        held.append(Held(envelope=envelope, at=now))
         if source not in self.whois_inflight:
             self.whois_inflight.add(source)
-            self._send(source, protocol.whois())
+            self._send(source, protocol.whois(to=self._scope_of(source)))
 
     def _flush_pending(self, source: bytes) -> None:
         now = time.monotonic()
         for item in self.pending.pop(source, []):
             if now - item.at < PENDING_MAX_AGE_SECONDS:
-                self._data(source, item.dest_frame, item.body)
+                self._relay(source, item.envelope)

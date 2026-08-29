@@ -24,6 +24,7 @@ feature of the same name.
 import argparse
 import asyncio
 import contextlib
+import json
 import logging
 import sys
 from typing import Annotated, Any
@@ -45,6 +46,7 @@ from .backend import (
     configure_logging,
 )
 from .hook import envelope, silence
+from .protocol import Envelope
 
 logger = logging.getLogger(__name__)
 
@@ -393,13 +395,22 @@ async def dev_connections() -> dict[str, Any]:
 
 def _shown(message: dict[str, Any]) -> str:
     """One inbox entry as a single line for the hook to carry."""
-    match message:
-        case {"kind": "bounce", "reason": reason}:
-            return f"  · undelivered: {reason}"
-        case {"kind": "error", "reason": reason}:
-            return f"  · refused: {reason}"
-    sender = (message.get("from") or {}).get("name") or "someone"
-    return f"  · {sender} → {'you' if message.get('to') else 'everyone'}: {message.get('body', '')}"
+    envelope = Envelope.from_wire(message)
+    payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+    if envelope.frm is not None and envelope.frm.is_the_hat:
+        match envelope.op:
+            case "bounce":
+                return f"  · undelivered: {payload.get('reason', 'no reason given')}"
+            case "error":
+                return f"  · refused: {payload.get('reason', 'no reason given')}"
+    sender = (envelope.frm.peer.name if envelope.frm and envelope.frm.peer else None) or "someone"
+    aloud = "you" if envelope.to.peer else "everyone"
+    mentioned = ""
+    if envelope.mentions:
+        # Who is called on to react, which is not who receives it: a mention on the open channel is heard by all.
+        mentioned = " (calling on " + ", ".join(m.name or "someone" for m in envelope.mentions) + ")"
+    said = envelope.body if envelope.body is not None else json.dumps(envelope.payload, ensure_ascii=False)
+    return f"  · {sender} → {aloud}{mentioned}: {said}"
 
 
 def _hook_context() -> str:

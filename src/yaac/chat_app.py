@@ -15,6 +15,7 @@ mid-sentence. See docs/tui.md.
 """
 
 import asyncio
+import json
 import sys
 from collections.abc import Callable
 from datetime import datetime
@@ -27,6 +28,7 @@ from textual.containers import Vertical
 from textual.widgets import Input, Label, ListItem, ListView, RichLog, Static
 
 from .backend import Backend, ConnectionRefused, Membership
+from .protocol import Envelope
 
 EVERYONE = "everyone on the channel"
 
@@ -147,13 +149,20 @@ class ChatApp(App):
         self.present = present
 
     def render_message(self, message: dict[str, Any]) -> str:
-        if message.get("kind") == "bounce":
-            return f"[red]{stamp(message.get('ts'))}  undelivered: {message.get('reason', 'no reason given')}[/red]"
-        sender = (message.get("from") or {}).get("name") or "?"
-        to = (message.get("to") or {}).get("name")
+        envelope = Envelope.from_wire(message)
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        if envelope.frm is not None and envelope.frm.is_the_hat:
+            reason = payload.get("reason", "no reason given")
+            label = "undelivered" if envelope.op == "bounce" else "refused"
+            return f"[red]{stamp(envelope.ts)}  {label}: {reason}[/red]"
+        sender = (envelope.frm.peer.name if envelope.frm and envelope.frm.peer else None) or "?"
         # A broadcast and a whisper read identically otherwise, and they are not the same social act.
-        addressed = "you" if to else "[i]all[/i]"
-        return f"{stamp(message.get('ts'))}  [b]{sender}[/b] → {addressed}   {message.get('body', '')}"
+        addressed = "you" if envelope.to.peer else "[i]all[/i]"
+        called = ""
+        if envelope.mentions:
+            called = " [i](" + ", ".join(m.name or "?" for m in envelope.mentions) + ")[/i]"
+        said = envelope.body if envelope.body is not None else json.dumps(envelope.payload, ensure_ascii=False)
+        return f"{stamp(envelope.ts)}  [b]{sender}[/b] → {addressed}{called}   {said}"
 
     def write(self, line: str) -> None:
         self.query_one("#log", RichLog).write(line)

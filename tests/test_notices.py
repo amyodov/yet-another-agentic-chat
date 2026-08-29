@@ -14,10 +14,11 @@ from typing import Any
 
 import pytest
 
-from yaac import notices
+from yaac import notices, protocol
 from yaac.backend import Backend
 from yaac.hook import envelope
 from yaac.notices import Notices, ask, describe_arrival, ports_for
+from yaac.protocol import Address, Scope
 
 FORUM = "forum"
 SETTLE = 0.4
@@ -81,26 +82,42 @@ def test_both_sides_of_a_session_derive_the_same_ports() -> None:
         assert 20_000 <= port < 24_000
 
 
+def carried(**kwargs) -> dict[str, Any]:
+    """A message as the hat would have handed it over, built by the real constructors so these cases cannot
+    drift from the shape the wire actually carries."""
+    return protocol.message(**kwargs).to_wire()
+
+
+ALICE = Scope(peer=Address("ann"))
+
+
 @pytest.mark.parametrize(
     "message,expected",
     [
         (
-            {"from": {"name": "bob"}, "to": None, "body": "SECRET-BODY"},
+            carried(to=Scope(channel=FORUM), frm=Scope(channel=FORUM, peer=Address("bob")), body="SECRET-BODY"),
             "1 new: a broadcast on 'forum' to you as 'ann', from 'bob' -- call check_inbox",
         ),
         (
-            {"from": {"name": "bob"}, "to": {"name": "ann"}, "body": "SECRET-BODY"},
+            carried(
+                to=Scope(channel=FORUM, peer=Address("ann")),
+                frm=Scope(channel=FORUM, peer=Address("bob")),
+                body="SECRET-BODY",
+            ),
             "1 new: a whisper on 'forum' to you as 'ann', from 'bob' -- call check_inbox",
         ),
         (
-            {"kind": "bounce", "reason": "gone"},
+            protocol.bounce("01J", "gone", to=ALICE).to_wire(),
             "1 new: a bounce on 'forum' to you as 'ann', from 'someone' -- call check_inbox",
         ),
         (
-            {"kind": "error", "reason": "refused"},
+            protocol.error("refused", to=ALICE).to_wire(),
             "1 new: a refusal on 'forum' to you as 'ann', from 'someone' -- call check_inbox",
         ),
-        ({"from": {"name": "b" * 300}, "to": None, "body": "SECRET-BODY"}, "1 new -- call check_inbox"),
+        (
+            carried(to=Scope(channel=FORUM), frm=Scope(channel=FORUM, peer=Address("b" * 300)), body="SECRET-BODY"),
+            "1 new -- call check_inbox",
+        ),
     ],
     ids=["broadcast", "whisper", "bounce", "error", "unbounded-name"],
 )

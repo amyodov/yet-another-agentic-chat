@@ -9,6 +9,7 @@ import asyncio
 import pytest
 
 from yaac.backend import Backend
+from yaac.protocol import Envelope
 
 # textual is the `chat` extra. Skipping the file is the honest outcome when it is absent -- CI installs it with
 # --all-extras, so a skip here means a local checkout synced without the extra, not a gap in coverage.
@@ -49,8 +50,9 @@ async def test_a_person_and_a_peer_exchange_messages(endpoint: str) -> None:
             await pilot.press(*"hello bob", "enter")
             await settle(pilot)
             [received] = peer.resolve(None).receive()
-            assert received["body"] == "hello bob"
-            assert received["from"]["name"] == "ann"
+            carried = Envelope.from_wire(received)
+            assert carried.body == "hello bob"
+            assert carried.frm.peer.name == "ann"
 
             await peer.resolve(None).send("hello ann", "ann")
             await settle(pilot)
@@ -197,7 +199,7 @@ async def test_picking_a_peer_makes_the_next_message_a_whisper(endpoint: str) ->
             await pilot.press(*"psst", "enter")
             await settle(pilot)
             [whisper] = peer.resolve(None).receive()
-            assert whisper["to"]["name"] == "bob"
+            assert Envelope.from_wire(whisper).to.peer.name == "bob"
     finally:
         await peer.disconnect_all()
         peer.close()
