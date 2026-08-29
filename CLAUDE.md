@@ -309,16 +309,30 @@ Settled in discussion with Alex; build only when told, ask before deviating. The
   `{channel, peer}` is that peer as a member of that channel, and `to: {}` — no scope at all — addresses whoever
   wears the hat, for technical asks; symmetrically `from: {}` marks infrastructure messages such as bounces
   (today `from: null`). Senders never transmit `from` at all — the hat stamps it from its table (rule 6), so
-  `from: {}` is unforgeable by construction, not by validation. Open: the world channel is a null channel on the
-  wire, so `{}` and `{channel: null}` must not collapse — either strict absent-vs-null discipline in the
-  serializer, or a dedicated field for the hat address. Also open: whether the message structure travels as an
-  end-to-end body object the hat never decodes, or as envelope fields the hat copies.
+  `from: {}` is unforgeable by construction, not by validation.
+
+  **Null is not absent, and the serializer never drops it.** `{channel: null}` is the world channel — everybody —
+  and `{}` is the hat; a serializer that omitted null fields would turn a shout to the world into a private
+  question to the operator. The same distinction reads clearly on the other side too: `from: {channel: null}` is
+  somebody speaking on the world channel, `from: {}` is the hat itself. Tested in both directions, encode and
+  decode, since dropping a null is the kind of helpfulness a JSON library adds on its own.
+
+  **`mentions` and `tags` are envelope fields, not part of the message object.** They sit beside `from`/`to` where
+  the hat can read them, which leaves rule 5 intact — a body is what the hat never reads, and these are not body.
+  It matters for `mentions`: the hat can complete each address from its table the way it completes `from`, so a
+  recipient answers "am I mentioned?" by comparing routing ids rather than names, which is exact where a name is
+  ambiguous the moment it has been reused. `payload` stays opaque: the hat has no business in it and no reason to
+  decode it.
 - **One envelope for all wire traffic, control included.** `hello`, channel listing, `whois`, `roster`, bounces
   and chat all travel as the same mail shape; the control/data split by frame count disappears. Rule 5 restates
   as: the hat interprets exactly the mail addressed to `{}`, and nothing else — delivery versus obedience decided
   by addressing, not frame layout. What the receiving backend does with operator mail (roster to cache, bounce to
-  inbox) is backend policy, not a second format. Decide at build time whether this framing unification bumps
-  `PROTOCOL_VERSION`.
+  inbox) is backend policy, not a second format. **This bumps `PROTOCOL_VERSION` to 2, and version 1 is abandoned
+  rather than bridged** — v1 was always temporary. Old and new peers then cannot talk at all, which `protocol.parse`
+  already enforces by refusing any version that is not this build's. The cost lands on a machine mid-upgrade: a new
+  session finds the endpoint held by an old hat and hears nothing, which is indistinguishable from an empty net
+  unless the refusal says which version it saw. It must say so — #29 is what the silent version of that failure
+  cost.
 - **Docs examples use the classical cast** — Alice, Bob, Carol; the hat-sees-everything caveat is "the hat is Eve
   by construction". One side note keeps a non-ASCII name to show names are unrestricted.
 
