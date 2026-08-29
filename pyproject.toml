@@ -30,8 +30,8 @@ classifiers = [
     "Topic :: Communications :: Chat",
 ]
 dependencies = [
-    "pyzmq>=26",
-    "mcp>=1.2",
+    "pyzmq~=27.0",
+    "mcp~=2.0",
 ]
 
 [project.scripts]

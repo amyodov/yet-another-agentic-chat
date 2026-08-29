@@ -24,6 +24,7 @@ feature of the same name.
 import argparse
 import asyncio
 import contextlib
+import logging
 import sys
 from typing import Annotated, Any
 
@@ -41,9 +42,11 @@ from .backend import (
     Membership,
     NotConnected,
     check_zmq_capabilities,
-    log,
+    configure_logging,
 )
 from .hook import envelope, silence
+
+logger = logging.getLogger(__name__)
 
 mcp = MCPServer(
     "yaac",
@@ -437,7 +440,7 @@ async def hook_report(
         return silence(client)
     if not (context := _hook_context()):
         return silence(client)
-    log(f"hook: delivered new messages on {event}")
+    logger.info("hook: delivered new messages on %s", event)
     return envelope(event, client, context)
 
 
@@ -491,7 +494,7 @@ def _adapt_tool_list_to_client() -> None:
         client = ctx.session.client_params
         name = client.client_info.name if client else None
         if not _all_tools_announced and name in CLIENTS_THAT_NEVER_RELIST:
-            log(f"client is {name!r}, which does not act on tools/list_changed; listing every tool up front")
+            logger.info("client is %r, which does not act on tools/list_changed; listing every tool up front", name)
             _announce_all_tools()
         result = await listing.handler(ctx, params)
         # The hook's tool is registered so it can be called, and withheld here so it is never offered. Filtering the
@@ -535,6 +538,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     _endpoint = args.endpoint
+    configure_logging()
 
     try:
         check_zmq_capabilities()
@@ -542,7 +546,7 @@ def main() -> None:
         print(f"[yaac] {exc}", file=sys.stderr, flush=True)
         raise SystemExit(1) from exc
 
-    log(f"dormant (rendezvous {_endpoint}); no sockets open, no files created")
+    logger.info("dormant (rendezvous %s); no sockets open, no files created", _endpoint)
     try:
         # zmq.asyncio waits for socket readiness via loop.add_reader, which Windows's default ProactorEventLoop does
         # not implement: pyzmq raises RuntimeError at the first socket use unless tornado happens to be installed.

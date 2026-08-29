@@ -11,7 +11,7 @@ is a trap for everything that merely looks at it.
 
 import argparse
 
-from .backend import DEFAULT_ENDPOINT, check_zmq_capabilities
+from .backend import DEFAULT_ENDPOINT, check_zmq_capabilities, configure_logging
 
 NEEDS_TEXTUAL = (
     "yaac-chat needs textual, which ships as an optional extra so that an MCP-only install stays small.\n"
@@ -31,6 +31,7 @@ def main() -> None:
     parser.add_argument("--channel", help="Channel to join at startup. Without it, the channel list opens first.")
     parser.add_argument("--name", help="Your name on that channel. Required with --channel.")
     args = parser.parse_args()
+    configure_logging()
     if bool(args.channel) != bool(args.name):
         parser.error("--channel and --name go together")
 

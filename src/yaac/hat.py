@@ -21,6 +21,7 @@ libzmq built without draft support, so ``setsockopt`` rejects it with ``EINVAL``
 ``whois`` covers the remaining case: a data message from a routing id absent from the table.
 """
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -29,6 +30,8 @@ import zmq
 
 from . import protocol
 from .protocol import Address, Identity
+
+logger = logging.getLogger(__name__)
 
 # Bounds on `pending`, so a routing id that never answers `whois` cannot grow the dict without limit. On overflow the
 # sender receives a bounce instead of the message being held indefinitely.
@@ -57,9 +60,8 @@ class Held:
 class Hat:
     """Routing table and message switch. Owns the ROUTER socket but runs no loop; `Backend._pump_router` calls in."""
 
-    def __init__(self, router: zmq.Socket, log: Any) -> None:
+    def __init__(self, router: zmq.Socket) -> None:
         self.router = router
-        self.log = log
         self.routing_ids: dict[bytes, Identity] = {}
         self.by_name: dict[tuple[str, str], bytes] = {}
         self.channels: dict[str, ChannelInfo] = {}
@@ -79,7 +81,7 @@ class Hat:
             return True
         except zmq.ZMQError as exc:
             if exc.errno in (zmq.EHOSTUNREACH, zmq.EAGAIN):
-                self.log(f"peer unreachable, evicting {routing_id!r}: {zmq.strerror(exc.errno)}")
+                logger.info("peer unreachable, evicting %r: %s", routing_id, zmq.strerror(exc.errno))
                 self.evict(routing_id)
                 return False
             raise
@@ -149,13 +151,13 @@ class Hat:
                 try:
                     message = protocol.parse(single)
                 except ValueError as exc:
-                    self.log(f"dropping unreadable control frame from {source!r}: {exc}")
+                    logger.warning("dropping unreadable control frame from %r: %s", source, exc)
                     return
                 self._control(source, message)
             case [dest_frame, body]:
                 self._data(source, dest_frame, body)
             case _:
-                self.log(f"dropping {len(rest)}-frame message from {source!r}")
+                logger.warning("dropping %d-frame message from %r", len(rest), source)
 
     def _control(self, source: bytes, message: dict[str, Any]) -> None:
         match message.get("kind"):
@@ -166,7 +168,7 @@ class Hat:
                 # registering it would put a non-participant into rosters and member counts.
                 self._send(source, protocol.channels(self.channel_report()))
             case unknown:
-                self.log(f"ignoring control message {unknown!r} from {source!r}")
+                logger.warning("ignoring control message %r from %r", unknown, source)
 
     def _hello(self, source: bytes, message: dict[str, Any]) -> None:
         """Bind a (channel, name) pair to a routing_id.
@@ -189,7 +191,7 @@ class Hat:
             if self._reachable(incumbent):
                 self._send(source, protocol.error("name taken on this channel"))
                 return
-            self.log(f"evicted unreachable incumbent for {key!r}")
+            logger.info("evicted unreachable incumbent for %r", key)
 
         # A routing_id re-announcing under a different name gives up the old one.
         if (previous := self.routing_ids.get(source)) is not None and previous != Identity(*key):
@@ -208,7 +210,7 @@ class Hat:
         # Log only identity changes: reconnect-driven hellos would otherwise repeat a line per participant on every
         # changeover.
         if changed:
-            self.log(f"hello: {name!r} on {channel_name!r} as {source!r}")
+            logger.info("hello: %r on %r as %r", name, channel_name, source)
         self._flush_pending(source)
         self.broadcast_roster(channel_name)
 
@@ -221,7 +223,7 @@ class Hat:
         try:
             destination = protocol.Destination.from_wire(protocol.parse(dest_frame))
         except ValueError as exc:
-            self.log(f"dropping unreadable destination from {source!r}: {exc}")
+            logger.warning("dropping unreadable destination from %r: %s", source, exc)
             return
 
         # `channel` in the destination frame is checked against the sender's registered channel and otherwise

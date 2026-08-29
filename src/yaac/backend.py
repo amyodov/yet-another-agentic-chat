@@ -24,6 +24,8 @@ States:
 
 import asyncio
 import contextlib
+import logging
+import os
 import random
 import sys
 from collections.abc import Callable
@@ -39,6 +41,8 @@ from .hat import Hat
 from .notices import Notices, describe_arrival
 from .protocol import Address
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_ENDPOINT = "tcp://127.0.0.1:19116"
 """19116 is 0x4AAC. Chosen below the ephemeral port range so the kernel will not assign it as the source port of an
 unrelated outbound connection, which would make the bind fail for reasons unrelated to YAAC."""
@@ -50,13 +54,24 @@ SEND_HIGH_WATER_MARK = 1000
 """Outbound queue limit. Once reached, `send` raises `zmq.Again` instead of blocking or buffering without bound."""
 
 
-def log(message: str) -> None:
-    """Write a diagnostic line to stderr.
+def configure_logging() -> None:
+    """Send this package's log to stderr. Called by the entry points, never on import.
 
-    stdout carries the MCP stdio transport. Any non-JSON-RPC byte written there makes the client fail to parse the
-    stream, so nothing in this package may print to stdout.
+    stdout carries the MCP stdio transport, so a handler that defaulted there would break the session with a parse
+    error -- which is why the handler is explicit rather than left to `basicConfig`, whose default is stderr today
+    but is not ours to assume. A library that configured logging on import would also be deciding this for whoever
+    imported it.
+
+    `YAAC_LOG_LEVEL` names any level `logging` knows; the default says what a session did without narrating it.
     """
-    print(f"[yaac] {message}", file=sys.stderr, flush=True)
+    logger = logging.getLogger(__package__)
+    logger.setLevel(os.environ.get("YAAC_LOG_LEVEL", "INFO").upper())
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("[yaac] %(message)s"))
+    logger.addHandler(handler)
+    # Nothing above this package should have to care, and a root handler installed by a host would otherwise get a
+    # second copy of every line.
+    logger.propagate = False
 
 
 class NotConnected(Exception):
@@ -181,7 +196,7 @@ class Membership:
                     with contextlib.suppress(zmq.ZMQError):
                         await self._send_hello()
                 case zmq.EVENT_DISCONNECTED:
-                    log(f"{self.name!r} lost the hat; the DEALER will reconnect by itself")
+                    logger.info("%r lost the hat; the DEALER will reconnect by itself", self.name)
 
     async def _pump_dealer(self) -> None:
         """Receive loop. Every message the hat sends this membership is one JSON frame."""
@@ -193,7 +208,7 @@ class Membership:
             try:
                 message = protocol.parse(frame)
             except ValueError as exc:
-                log(f"dropping unreadable frame from the hat: {exc}")
+                logger.warning("dropping unreadable frame from the hat: %s", exc)
                 continue
             self._deliver(message)
 
@@ -227,7 +242,7 @@ class Membership:
                 # Written to the inbox so an undeliverable message is visible to the agent rather than silently lost.
                 self._append(message)
             case other:
-                log(f"ignoring control message {other!r} from the hat")
+                logger.warning("ignoring control message %r from the hat", other)
 
     def _append(self, message: dict[str, Any]) -> None:
         self.inbox.append(message)
@@ -242,7 +257,7 @@ class Membership:
         try:
             self.on_change()
         except Exception as exc:  # noqa: BLE001 -- an observer is a guest here, not part of the transport
-            log(f"on_change observer raised {exc!r}; continuing")
+            logger.warning("on_change observer raised %r; continuing", exc)
 
     # -- operations ------------------------------------------------------
 
@@ -393,7 +408,7 @@ class Backend:
 
         self.memberships[membership.routing_id] = membership
         await self.notices.start()
-        log(f"on air as {name!r} on {channel!r} ({'hat' if self.is_wearing_hat else 'participant'})")
+        logger.info("on air as %r on %r (%s)", name, channel, "hat" if self.is_wearing_hat else "participant")
         return Connection(
             connection_id=membership.routing_id,
             channel=channel,
@@ -407,7 +422,7 @@ class Backend:
         membership = self.resolve(connection_id)
         del self.memberships[membership.routing_id]
         await membership.close()
-        log(f"off air ({membership.name!r} on {membership.channel!r})")
+        logger.info("off air (%r on %r)", membership.name, membership.channel)
         self._release_if_idle()
         return membership
 
@@ -445,14 +460,14 @@ class Backend:
         except zmq.ZMQError as exc:
             router.close()
             if exc.errno != zmq.EADDRINUSE:
-                log(f"bind failed unexpectedly: {exc}")
+                logger.warning("bind failed unexpectedly: %s", exc)
             return False
         self.router = router
-        self.hat = Hat(router, log)
+        self.hat = Hat(router)
         # Every membership's DEALER is connected to this endpoint, so the hat reaches its own process through its own
         # ROUTER like any other participant. This keeps one send path and one receive path regardless of role.
         self._spawn(self._pump_router(), "yaac-router")
-        log(f"won the bind: this session is now wearing the hat on {self.endpoint}")
+        logger.info("won the bind: this session is now wearing the hat on %s", self.endpoint)
         return True
 
     def _ensure_election_running(self) -> None:
@@ -485,7 +500,7 @@ class Backend:
             except Exception as exc:
                 # One malformed or unroutable message must not end the loop, or the endpoint would stay bound with
                 # nothing servicing it and no other process able to take over.
-                log(f"hat error while routing: {exc!r}")
+                logger.warning("hat error while routing: %r", exc)
 
     def _release_if_idle(self) -> None:
         """Give up the ROUTER and the election loop once no membership is left, so a dormant process holds nothing."""
@@ -501,7 +516,7 @@ class Backend:
             self.router.close()
             self.router = None
             self.hat = None
-            log("released the bind")
+            logger.info("released the bind")
 
     def close(self) -> None:
         """Close every socket, then terminate the context. Call on process shutdown.
