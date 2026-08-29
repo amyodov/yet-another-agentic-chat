@@ -224,6 +224,12 @@ async def test_each_client_is_answered_in_the_contract_it_reads(
     assert listener.resolve(None).pending_count() == 0
 
 
+def _stdin(payload: dict[str, Any], encoding: str = "cp1251"):
+    """A hook payload as a client actually hands it over: UTF-8 bytes, under a text layer decoding with whatever
+    the console chose. `cp1251` is the default on a Russian Windows, and is the case Vadim met."""
+    return io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode("utf-8")), encoding=encoding)
+
+
 @pytest.mark.parametrize(
     "payload,speaks",
     [
@@ -242,10 +248,27 @@ def test_the_out_of_process_hook_says_it_once(monkeypatch, payload: dict[str, An
     # Both are stubbed: what is under test is whether it speaks once per turn, not how it finds anybody.
     monkeypatch.setattr(yaac_hook, "directory", lambda: [{"pid": 1, "cwd": "/here", "watch": "ws://127.0.0.1:1/x"}])
     monkeypatch.setattr(yaac_hook, "ask", lambda url, thread=None: {"session": None, **waiting})
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": "/here", **payload})))
-    monkeypatch.setattr(sys, "argv", ["yaac-hook", "--key", "a-session"])
+    monkeypatch.setattr(sys, "stdin", _stdin({"cwd": "/here", **payload}))
     yaac_hook.main()
     assert ("decision" in capsys.readouterr().out) == speaks
+
+
+@pytest.mark.parametrize("cwd", ["/дом", "/家", "/plain"], ids=["cyrillic", "han", "ascii"])
+def test_the_payload_is_read_as_utf8_whatever_the_console_says(monkeypatch, cwd: str, capsys) -> None:
+    """A hook payload is UTF-8 by its client's contract, and `sys.stdin` decodes with the console's encoding
+    instead -- so on a Russian Windows the directory a session was started in came back as a different string,
+    and the hook matched nobody. Reading the buffer is what keeps a path or a name intact through the one place
+    it crosses a process boundary as text.
+    """
+    monkeypatch.setattr(yaac_hook, "directory", lambda: [{"pid": 1, "cwd": cwd, "watch": "ws://127.0.0.1:1/x"}])
+    monkeypatch.setattr(
+        yaac_hook, "ask", lambda url, thread=None: {"connections": [{"channel": "форум", "name": "аня", "unread": 1}]}
+    )
+    monkeypatch.setattr(sys, "stdin", _stdin({"cwd": cwd, "hook_event_name": "Stop"}))
+    yaac_hook.main()
+
+    spoken = json.loads(capsys.readouterr().out)
+    assert "1 on 'форум', to you as 'аня'" in spoken["reason"]
 
 
 @pytest.mark.parametrize("client", ["claude-code", "codex"])

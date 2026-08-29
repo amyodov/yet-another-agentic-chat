@@ -6,7 +6,9 @@ because getting it wrong is either invisible or catastrophic in production.
 
 import asyncio
 import contextlib
+import io
 import json
+import logging
 import os
 import socket
 import sys
@@ -16,7 +18,7 @@ from typing import Any
 import pytest
 
 from yaac import frontend
-from yaac.backend import ConnectionRefused
+from yaac.backend import ConnectionRefused, configure_logging
 
 REPO = Path(__file__).resolve().parent.parent
 SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
@@ -525,3 +527,25 @@ def test_no_python_file_reads_or_writes_text_without_naming_the_encoding() -> No
             if ("read_text(" in line or "write_text(" in line) and "encoding=" not in line:
                 offenders.append(f"{path.relative_to(REPO)}:{number}")
     assert offenders == []
+
+
+@pytest.mark.parametrize("name", ["форум", "会議", "forum"], ids=["cyrillic", "han", "ascii"])
+def test_a_log_line_carries_a_name_a_console_cannot_spell(monkeypatch, name: str) -> None:
+    """Every log line quotes a channel or participant name, which is raw UTF-8, while the console's encoding is
+    whatever the OS chose -- cp1251 on a Russian Windows. A handler writing through `sys.stderr` there raises
+    inside `emit`, and `logging` answers with "--- Logging error ---" instead of the line, losing exactly the
+    diagnostic somebody was reading the log for."""
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1251", errors="strict")
+    monkeypatch.setattr(sys, "stderr", console)
+    logger = logging.getLogger("yaac")
+    handlers = list(logger.handlers)
+    try:
+        logger.handlers.clear()
+        configure_logging()
+        logger.info("on air as %r", name)
+        for handler in logger.handlers:
+            handler.flush()
+    finally:
+        logger.handlers[:] = handlers
+
+    assert f"[yaac] on air as {name!r}" in console.buffer.getvalue().decode("utf-8")

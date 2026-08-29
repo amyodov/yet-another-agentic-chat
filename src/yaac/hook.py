@@ -159,8 +159,12 @@ def main() -> None:
     listening. The mail is in the inbox regardless, for `check_inbox` to collect.
     """
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
-    except ValueError:
+        # The bytes, not the text. A hook payload is UTF-8 by its client's contract, while `sys.stdin` decodes
+        # with the console's encoding -- cp1251 on a Russian Windows, where a channel or participant name outside
+        # its repertoire comes back as the wrong name or raises. Reading the buffer is what keeps the rule that
+        # names are never parsed, split or transformed anywhere they pass through.
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
         payload = {}
 
     event = payload.get("hook_event_name") or "Stop"

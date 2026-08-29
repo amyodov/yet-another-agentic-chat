@@ -24,6 +24,7 @@ States:
 
 import asyncio
 import contextlib
+import io
 import logging
 import os
 import random
@@ -63,10 +64,19 @@ def configure_logging() -> None:
     imported it.
 
     `YAAC_LOG_LEVEL` names any level `logging` knows; the default says what a session did without narrating it.
+
+    The handler writes UTF-8 over stderr's buffer rather than through stderr itself. Channel and participant
+    names are raw UTF-8 and every log line quotes them, while the console's encoding is whatever the OS chose --
+    cp1251 on a Russian Windows, where a name outside its repertoire makes `emit` raise and `logging` answers
+    with "--- Logging error ---" instead of the line. `backslashreplace` keeps the rest of the line when a
+    destination genuinely cannot carry a character.
     """
     logger = logging.getLogger(__package__)
     logger.setLevel(os.environ.get("YAAC_LOG_LEVEL", "INFO").upper())
-    handler = logging.StreamHandler(sys.stderr)
+    stream = sys.stderr
+    if (raw := getattr(sys.stderr, "buffer", None)) is not None:
+        stream = io.TextIOWrapper(raw, encoding="utf-8", errors="backslashreplace", line_buffering=True)
+    handler = logging.StreamHandler(stream)
     handler.setFormatter(logging.Formatter("[yaac] %(message)s"))
     logger.addHandler(handler)
     # Nothing above this package should have to care, and a root handler installed by a host would otherwise get a

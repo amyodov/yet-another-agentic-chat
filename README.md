@@ -420,9 +420,13 @@ the choices, and `dev_connections()` lists them on demand.
 - Installable as a plugin as well as a plain MCP server, in both plugin standards
 - On Claude Code, messages delivered into the session as they arrive, without
   anyone remembering to ask
+- On Codex, the same, from a hooks file that names nothing: the hook finds its own
+  session at the address everyone already meets at
 - And a watch a session can arm once, so mail reaches it even while it sits idle
   doing nothing — the one case a hook cannot cover, since a hook needs the
   session to act first
+- A Codex session waking from its prompt when mail arrives, joining its queue
+  rather than interrupting whatever it is in the middle of
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on
   all three
 
