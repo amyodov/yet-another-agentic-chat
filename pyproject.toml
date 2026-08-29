@@ -1,6 +1,6 @@
 [project]
 name = "yet-another-agentic-chat"
-version = "0.4.1"
+version = "0.5.0"
 description = "Messaging between concurrent AI coding sessions, across clients, over MCP. Zero infrastructure. (YAAC: Yet Another Agentic Chat.)"
 readme = "README.md"
 license = "MIT"
