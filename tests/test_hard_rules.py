@@ -299,7 +299,8 @@ async def test_check_inbox_will_not_read_an_inbox_it_was_not_given(
         assert "open_connections" in body
 
 
-async def test_a_server_whose_client_left_lets_go_of_the_port(endpoint: str) -> None:
+@pytest.mark.parametrize("joins", [True, False], ids=["wearing-the-hat", "never-joined"])
+async def test_a_server_whose_client_left_lets_go_of_the_port(endpoint: str, joins: bool) -> None:
     """A client going away is the ordinary end of every session, and the process has to actually end.
 
     It did not. `Backend.close` terminated the ZMQ context without closing the sockets in it, and termination
@@ -308,7 +309,10 @@ async def test_a_server_whose_client_left_lets_go_of_the_port(endpoint: str) -> 
     port that accepts connections and answers nothing, which reads as an empty network rather than a broken one.
 
     The port is the assertion, not the exit code: a hat that cannot be replaced is the part that hurts other
-    sessions.
+    sessions. Unconditional, whatever the process was doing -- losing stdin means the client that owns it is gone
+    and no request can ever arrive again, so there is nothing left for it to be. A hat is no reason to stay: the
+    election hands the endpoint to whoever binds next, in about two seconds. A membership is a reason to leave,
+    since a name held by a process nobody can reach swallows every message sent to it.
     """
     port = int(endpoint.rsplit(":", 1)[1])
     process = await asyncio.create_subprocess_exec(
@@ -317,9 +321,9 @@ async def test_a_server_whose_client_left_lets_go_of_the_port(endpoint: str) -> 
     )
     assert process.stdin and process.stdout
 
-    for request in [*handshake(), {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
-                                   "params": {"name": "join_channel",
-                                              "arguments": {"channel": "forum", "name": "ann"}}}]:
+    join = [{"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+             "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}}}]
+    for request in [*handshake(), *(join if joins else [])]:
         process.stdin.write((json.dumps(request) + "\n").encode())
         await process.stdin.drain()
         if "id" in request:
