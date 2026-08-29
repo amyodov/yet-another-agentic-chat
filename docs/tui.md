@@ -95,7 +95,8 @@ not a crowd, so the names fit and are more useful than a number.
 - **`@name` completion.** Ghost text on the prompt, with an up/down candidate strip when a prefix is ambiguous.
   Up/Down are displaced from history recall only while that strip is showing.
 - **Last-traffic times** (`5m`) in the members list. The hat has the timestamps; the roster message would need to
-  carry them, which makes it a protocol change and puts it with the envelope work in `zmq.md` rather than here.
+  carry them. That is now an addition rather than a redesign -- version 2 puts a roster in the same envelope as
+  everything else, and its `payload` is the hat's to shape.
   Call it "last message", never "last seen" — the healthiest participant in this system is one that has been
   quietly working for two hours.
 - **Reachability on demand.** The hat can test the roster by attempting a send and reporting who raised
