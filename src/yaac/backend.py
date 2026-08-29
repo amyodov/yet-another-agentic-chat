@@ -507,11 +507,12 @@ class Backend:
     def rouse(self, membership: Membership) -> None:
         """Wake this session, if it asked to be woken and something knows how to reach it.
 
-        Off unless `YAAC_WAKE` is set: starting a turn spends tokens and runs tools in somebody's session, which
-        is not a decision to take on their behalf. Coalescing needs no policy -- one wake drains any number of
-        messages, because reading is a pull -- so a wake already in flight is simply left to finish.
+        Off unless `YAAC_WAKE` names the app-server's WebSocket: starting a turn spends tokens and runs tools in
+        somebody's session, which is not a decision to take on their behalf. Coalescing needs no policy -- one
+        wake drains any number of messages, because reading is a pull -- so a wake already in flight is left to
+        finish.
         """
-        if not wake.wanted() or self.notices.thread is None or self._waking is not None:
+        if (url := wake.wanted()) is None or self.notices.thread is None or self._waking is not None:
             return
 
         async def rouse_once() -> None:
@@ -520,6 +521,7 @@ class Backend:
                     self.notices.thread,
                     f"[YAAC] Mail arrived on {membership.channel!r} for {membership.name!r}. "
                     f"Call check_inbox to read it. Nobody typed this: another session sent you a message.",
+                    url=url,
                 )
             finally:
                 self._waking = None

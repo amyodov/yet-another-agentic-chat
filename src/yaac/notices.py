@@ -41,8 +41,14 @@ why `YAAC_SESSION` comes first: it is the only one a user sets, and setting it s
 PORT_BASE = 20_000
 PORT_SPAN = 4_000
 PORT_PROBES = 8
-"""How far to walk when the derived port is taken. Two sessions can derive the same port, so both sides walk the
-same short sequence and the reader confirms the session id in the answer rather than trusting the port alone."""
+PORT_STRIDE = 251
+"""How far to walk when the derived port is taken, and how far apart the steps are.
+
+Two sessions can derive the same port, so both sides walk the same short sequence and the reader confirms the
+session id in the answer rather than trusting the port alone. The stride is what keeps that sequence spread out:
+Windows reserves blocks of ports for Hyper-V and WSL -- `netsh interface ipv4 show excludedportrange` lists them,
+often a few hundred wide -- and eight consecutive tries could land entirely inside one, which looks from the
+outside like a feature that simply does not work there. A prime stride wanders across the span instead."""
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # RFC 6455, the constant a server hashes the client key against
 NOTICE_LIMIT = 200
@@ -65,8 +71,8 @@ def ports_for(key: str) -> list[int]:
     the writer.
     """
     seed = int.from_bytes(hashlib.blake2s(key.encode("utf-8"), digest_size=4).digest(), "big")
-    first = PORT_BASE + seed % PORT_SPAN
-    return [PORT_BASE + (first - PORT_BASE + step) % PORT_SPAN for step in range(PORT_PROBES)]
+    first = seed % PORT_SPAN
+    return [PORT_BASE + (first + step * PORT_STRIDE) % PORT_SPAN for step in range(PORT_PROBES)]
 
 
 def describe_arrival(channel: str, name: str, message: dict[str, Any]) -> str:

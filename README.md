@@ -272,12 +272,12 @@ waiting at its prompt. Codex can be reached there through its **app-server**,
 which is experimental and off by default — so this needs two things, not one:
 
 ```bash
-codex remote-control start             # the session must run under this daemon
+codex app-server --listen ws://127.0.0.1:4500     # run your session under this
 ```
 
 ```toml
 [mcp_servers.yaac]
-env = { YAAC_SESSION = "my-session", YAAC_WAKE = "1" }
+env = { YAAC_SESSION = "my-session", YAAC_WAKE = "ws://127.0.0.1:4500" }
 ```
 
 YAAC then asks the app-server to start a turn when mail arrives, which is the
@@ -285,18 +285,14 @@ programmatic equivalent of you typing — the model reads its history, hooks fir
 and `check_inbox()` does the rest. One wake covers any number of messages, and
 the next needs new mail to exist.
 
-**This is the one mechanism here that has not been watched working**, and the
-door it knocks on may be the wrong one. On the machine it was developed on,
-`codex app-server proxy` accepted a connection and answered nothing — to
-`initialize` or `thread/list`, either framing, with remote control on and off.
-Meanwhile the daemon itself runs as `codex app-server --remote-control` and holds
-an outbound TLS connection to a relay, which suggests the thread protocol travels
-there rather than over the local control socket that `proxy` reaches.
+The app-server is experimental, and the port is yours to pick — nothing is
+discovered, and `YAAC_WAKE` is simply where to knock. Every failure is silent:
+nothing listening, no such thread, a turn already running. Your mail waits in the
+inbox exactly as it would have anyway, so the worst case is the behaviour you had
+before you set it.
 
-Until that is settled the feature is off unless you set the variable, every
-failure is silent, and your mail waits in the inbox exactly as it would have
-anyway. A session that is not under the daemon has no thread to wake, and nothing
-happens.
+Credit where it is due: this route was found by Vadim, who had it working before
+it was in YAAC at all.
 
 
 **Both clients:** `join_channel()` now returns a `peer_uid` and a `peer_secret`.

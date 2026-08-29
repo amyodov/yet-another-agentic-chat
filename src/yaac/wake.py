@@ -1,86 +1,166 @@
 """Waking a Codex session that is sitting idle.
 
-A hook only fires when a session does something, so it cannot reach one that is waiting at its prompt. Codex can
-be reached, though not by delivering: `turn/start` on its app-server begins a turn, which is the programmatic
-equivalent of the user typing. Everything else follows from there -- hooks fire, and the model reads its history.
+A hook only fires when a session does something, so it cannot reach one waiting at its prompt. Codex can be
+reached there, though not by delivering: `turn/start` on its app-server begins a turn, which is the programmatic
+equivalent of the user typing. Everything else follows -- hooks fire, and the model reads its history.
 
 So this is an alarm clock rather than a postman. It says that mail is waiting and lets `check_inbox` do the
-reading, which is the same division the notice socket already makes, for the same reason: what a session receives
+reading, which is the division the notice socket already makes, for the same reason: what a session receives
 should be what it chose to collect.
 
-Two things keep it modest. It is off unless the user turns it on, because starting a turn spends tokens and runs
-tools in somebody's session and that is not a decision a library should take unasked. And it names no `model`,
-`cwd` or `approvalPolicy` -- `turn/start` requires only the thread and the input, so Codex answers those from the
-thread's own configuration rather than from our guess about it.
+**The door is a WebSocket the user opens on purpose.** `codex app-server --listen ws://127.0.0.1:4500` serves the
+thread protocol over a local socket, and `YAAC_WAKE` is that URL. There is nothing to discover and nothing to
+guess: no daemon to find, no control socket, no relay, and no subprocess -- which also means no dependence on an
+event loop that can spawn one, and Windows runs the selector loop here because pyzmq must.
 
-The transport needs no discovery: `codex app-server proxy` connects to the running daemon's control socket and
-speaks JSON-RPC over stdio, so this is a subprocess rather than a hunt for a socket path. A session that is not
-running under that daemon has no thread to find, the call fails, and nothing happens -- the same shape as a
-notice nobody is watching.
+Two things keep it modest. It is off unless the user sets the variable, because starting a turn spends tokens and
+runs tools in somebody's session, which a library should not decide unasked. And it names no `model`, `cwd` or
+`approvalPolicy`: `turn/start` requires only the thread and the input, so Codex answers those from the thread's
+own configuration rather than from our guess about it.
 """
 
 import asyncio
+import base64
+import contextlib
 import json
 import logging
 import os
+import struct
+from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 WAKE_ENV = "YAAC_WAKE"
-"""Set to anything non-empty to let this session be woken. Off by default, deliberately."""
+"""The app-server's WebSocket URL, and the whole of the opt-in. Unset means this session is never woken."""
 
-PROXY = ("codex", "app-server", "proxy")
 TIMEOUT_SECONDS = 15.0
+HANDSHAKE_KEY = base64.b64encode(b"yaac------------").decode("ascii")
+"""Any 16 bytes; the server hashes it back and nothing here checks the answer. A client that verified it would be
+guarding against a server that cannot help it anyway."""
 
 
-def wanted() -> bool:
-    """Whether this session asked to be woken. One env var, no configuration file, no negotiation."""
-    return bool(os.environ.get(WAKE_ENV))
+def wanted() -> str | None:
+    """Where to knock, or None when this session did not ask to be woken."""
+    url = os.environ.get(WAKE_ENV, "").strip()
+    return url or None
 
 
-async def wake(thread: str, text: str, timeout: float = TIMEOUT_SECONDS) -> bool:
-    """Start a turn in `thread` with `text` as its input. True when the app-server accepted it.
+def _frame(text: str) -> bytes:
+    """One masked text frame. Clients must mask; servers must not, which is the only asymmetry in the framing."""
+    payload = text.encode("utf-8")
+    mask = os.urandom(4)
+    masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
+    if len(payload) < 126:
+        header = bytes([0x81, 0x80 | len(payload)])
+    elif len(payload) <= 0xFFFF:
+        header = bytes([0x81, 0xFE]) + struct.pack(">H", len(payload))
+    else:
+        header = bytes([0x81, 0xFF]) + struct.pack(">Q", len(payload))
+    return header + mask + masked
 
-    Every failure is quiet and false: no daemon running, no such thread, `codex` not on PATH, a turn already in
-    flight. The mail is in the inbox either way, and a session that cannot be woken is exactly a session that
-    reads its mail the next time it does something.
+
+async def _read_frame(reader: asyncio.StreamReader) -> str:
+    """One text frame from the server. Unmasked, since that is what a server sends."""
+    head = await reader.readexactly(2)
+    length = head[1] & 0x7F
+    if length == 126:
+        length = struct.unpack(">H", await reader.readexactly(2))[0]
+    elif length == 127:
+        length = struct.unpack(">Q", await reader.readexactly(8))[0]
+    return (await reader.readexactly(length)).decode("utf-8", errors="replace") if length else ""
+
+
+async def _answer(reader: asyncio.StreamReader, request_id: int) -> dict[str, Any] | None:
+    """The reply to one request, read past whatever else arrives first.
+
+    The app-server talks while it works -- `thread/started`, `remoteControl/status/changed`, tool progress -- and
+    a reader that took the next frame as its answer would pick up a notification instead. Matching on the id is
+    the whole of the bookkeeping.
     """
-    request = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "turn/start",
-            "params": {"threadId": thread, "input": [{"type": "text", "text": text}]},
-        }
-    )
-    try:
-        proxy = await asyncio.create_subprocess_exec(
-            *PROXY,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-    except OSError as exc:
-        logger.info("cannot reach the app-server to wake %s: %s", thread, exc)
-        return False
-
-    try:
-        stdout, _ = await asyncio.wait_for(proxy.communicate((request + "\n").encode()), timeout=timeout)
-    except TimeoutError:
-        proxy.kill()
-        await proxy.wait()
-        logger.info("the app-server did not answer within %.0fs; leaving %s asleep", timeout, thread)
-        return False
-
-    for line in stdout.decode("utf-8", errors="replace").splitlines():
+    while True:
+        raw = await _read_frame(reader)
+        if not raw:
+            return None
         try:
-            answer = json.loads(line)
+            message = json.loads(raw)
         except ValueError:
             continue
-        if answer.get("id") != 1:
-            continue
-        if error := answer.get("error"):
-            logger.info("the app-server refused to wake %s: %s", thread, error)
+        if message.get("id") == request_id:
+            return message
+
+
+async def wake(thread: str, text: str, url: str | None = None, timeout: float = TIMEOUT_SECONDS) -> bool:
+    """Start a turn in `thread` with `text` as its input. True when the app-server accepted it.
+
+    Every failure is quiet and false: nothing listening on that URL, no such thread, a turn already in flight. The
+    mail is in the inbox either way, and a session that cannot be woken is exactly a session that reads its mail
+    the next time it does something.
+    """
+    if (endpoint := url or wanted()) is None:
+        return False
+    parsed = urlparse(endpoint)
+    host, port = parsed.hostname or "127.0.0.1", parsed.port or 80
+
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+    except (OSError, TimeoutError) as exc:
+        logger.info("nothing listening at %s to wake %s: %s", endpoint, thread, exc)
+        return False
+
+    try:
+        writer.write(
+            f"GET {parsed.path or '/'} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+            f"Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {HANDSHAKE_KEY}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode()
+        )
+        await writer.drain()
+        handshake = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
+        if b"101" not in handshake.split(b"\r\n")[0]:
+            logger.info("%s did not accept a websocket: %s", endpoint, handshake.split(b"\r\n")[0])
             return False
-        return True
-    return False
+
+        # The app-server wants to know who it is talking to before it will do anything.
+        writer.write(
+            _frame(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {"clientInfo": {"name": "yaac", "title": "YAAC", "version": "0"}},
+                    }
+                )
+            )
+        )
+        writer.write(
+            _frame(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "turn/start",
+                        "params": {"threadId": thread, "input": [{"type": "text", "text": text}]},
+                    }
+                )
+            )
+        )
+        await writer.drain()
+
+        if await asyncio.wait_for(_answer(reader, 1), timeout=timeout) is None:
+            logger.info("%s never finished the handshake; leaving %s asleep", endpoint, thread)
+            return False
+        started = await asyncio.wait_for(_answer(reader, 2), timeout=timeout)
+    except (OSError, TimeoutError, asyncio.IncompleteReadError) as exc:
+        logger.info("could not wake %s through %s: %s", thread, endpoint, exc)
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            writer.close()
+
+    if started is None:
+        return False
+    if error := started.get("error"):
+        logger.info("the app-server refused to wake %s: %s", thread, error)
+        return False
+    return "result" in started

@@ -1,11 +1,21 @@
 """Waking a Codex session that is sitting idle, which a hook cannot do.
 
 A hook fires when a session acts; this fires when mail arrives. It is an alarm clock rather than a postman --
-`turn/start` begins a turn and `check_inbox` still does the reading -- so what is worth pinning down is that it
-stays silent unless the user asked for it, that it says who is speaking, and that every way of failing is quiet.
+`turn/start` begins a turn and `check_inbox` still does the reading.
+
+The door is a WebSocket the user opens on purpose: `codex app-server --listen ws://127.0.0.1:4500`. So these run
+against a real socket speaking the app-server's shape, rather than against a mock of it -- the framing, the
+masking a client owes a server, and reading past the notifications it interleaves are exactly the parts that
+would be wrong, and a mock would agree with whatever they did.
 """
 
 import asyncio
+import base64
+import contextlib
+import hashlib
+import json
+import struct
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -15,96 +25,154 @@ from yaac.backend import Backend
 
 FORUM = "forum"
 SETTLE = 0.4
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+class FakeAppServer:
+    """The smallest thing that behaves like `codex app-server --listen ws://…`.
+
+    It answers `initialize`, answers `turn/start`, and -- deliberately -- talks over itself first: the real one
+    emits `remoteControl/status/changed` and `thread/started` between a request and its reply, which is what
+    makes matching on the id necessary rather than tidy.
+    """
+
+    def __init__(self, refuse: bool = False, chatty: bool = True) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.refuse = refuse
+        self.chatty = chatty
+        self.server: asyncio.Server | None = None
+
+    @property
+    def url(self) -> str:
+        return f"ws://127.0.0.1:{self.server.sockets[0].getsockname()[1]}/"
+
+    async def start(self) -> None:
+        self.server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
+
+    async def stop(self) -> None:
+        if self.server is not None:
+            self.server.close()
+            with contextlib.suppress(Exception):
+                await self.server.wait_closed()
+
+    async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        request = await reader.readuntil(b"\r\n\r\n")
+        key = ""
+        for line in request.decode("latin-1").split("\r\n"):
+            if line.lower().startswith("sec-websocket-key:"):
+                key = line.split(":", 1)[1].strip()
+        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        writer.write(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            + f"Sec-WebSocket-Accept: {accept}\r\n\r\n".encode()
+        )
+        await writer.drain()
+
+        if self.chatty:
+            self._send(writer, {"method": "remoteControl/status/changed", "params": {"status": "disabled"}})
+        with contextlib.suppress(asyncio.IncompleteReadError, ConnectionError):
+            while True:
+                message = json.loads(await self._read(reader))
+                self.requests.append(message)
+                if self.chatty:
+                    self._send(writer, {"method": "thread/started", "params": {}})
+                if self.refuse:
+                    self._send(writer, {"id": message["id"], "error": {"code": -32602, "message": "no such thread"}})
+                else:
+                    self._send(writer, {"id": message["id"], "result": {"turn": {"status": "inProgress"}}})
+                await writer.drain()
+
+    @staticmethod
+    def _send(writer: asyncio.StreamWriter, message: dict[str, Any]) -> None:
+        payload = json.dumps(message).encode()
+        if len(payload) < 126:
+            header = bytes([0x81, len(payload)])
+        else:
+            header = bytes([0x81, 126]) + struct.pack(">H", len(payload))
+        writer.write(header + payload)
+
+    @staticmethod
+    async def _read(reader: asyncio.StreamReader) -> str:
+        """A client's frame, which is masked -- unmasking it here is what proves the client masked it."""
+        head = await reader.readexactly(2)
+        assert head[1] & 0x80, "a client must mask every frame it sends"
+        length = head[1] & 0x7F
+        if length == 126:
+            length = struct.unpack(">H", await reader.readexactly(2))[0]
+        mask = await reader.readexactly(4)
+        payload = await reader.readexactly(length)
+        return bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload)).decode()
+
+
+@pytest.fixture
+async def app_server() -> AsyncIterator[FakeAppServer]:
+    server = FakeAppServer()
+    await server.start()
+    yield server
+    await server.stop()
 
 
 @pytest.mark.parametrize(
     "value,wanted",
-    [("1", True), ("yes", True), ("", False), (None, False)],
-    ids=["one", "word", "empty", "unset"],
+    [("ws://127.0.0.1:4500", "ws://127.0.0.1:4500"), ("  ws://x:1  ", "ws://x:1"), ("", None), (None, None)],
+    ids=["url", "padded", "empty", "unset"],
 )
-def test_waking_is_off_until_the_user_asks_for_it(monkeypatch, value: str | None, wanted: bool) -> None:
-    """Starting a turn spends tokens and runs tools in somebody's session. That is not a decision a library takes
-    on their behalf, so the default is silence and one environment variable is the whole of the opt-in."""
+def test_waking_is_off_until_the_user_names_a_door(monkeypatch, value: str | None, wanted: str | None) -> None:
+    """Starting a turn spends tokens and runs tools in somebody's session, so the opt-in is the address itself:
+    there is nothing to discover, and an unset variable means this session is never woken."""
     monkeypatch.delenv(wake.WAKE_ENV, raising=False)
     if value is not None:
         monkeypatch.setenv(wake.WAKE_ENV, value)
-    assert wake.wanted() is wanted
+    assert wake.wanted() == wanted
 
 
-async def test_a_wake_asks_for_a_turn_in_the_named_thread(monkeypatch) -> None:
-    """The whole request: a thread and some input. No `model`, `cwd` or `approvalPolicy` -- `turn/start` requires
-    neither, so Codex answers those from the thread's own configuration rather than from our guess about it."""
-    seen: dict[str, Any] = {}
+async def test_a_wake_asks_for_a_turn_in_the_named_thread(app_server: FakeAppServer) -> None:
+    """The whole exchange, against a real socket: identify, then ask for a turn. No `model`, `cwd` or
+    `approvalPolicy` -- `turn/start` requires neither, so Codex answers those from the thread's own configuration
+    rather than from our guess about it."""
+    assert await wake.wake("01THREAD", "mail arrived", url=app_server.url) is True
 
-    class Proxy:
-        returncode = 0
+    identify, started = app_server.requests
+    assert identify["method"] == "initialize"
+    assert identify["params"]["clientInfo"]["name"] == "yaac"
+    assert started["method"] == "turn/start"
+    assert started["params"] == {"threadId": "01THREAD", "input": [{"type": "text", "text": "mail arrived"}]}
 
-        async def communicate(self, written: bytes) -> tuple[bytes, bytes]:
-            seen["request"] = __import__("json").loads(written.decode())
-            return b'{"jsonrpc":"2.0","id":1,"result":{}}\n', b""
 
-    async def spawn(*command, **kwargs):
-        seen["command"] = command
-        return Proxy()
+async def test_the_reply_is_found_past_whatever_the_server_says_first() -> None:
+    """The real app-server narrates while it works, so the frame after a request is usually not its answer."""
+    talkative = FakeAppServer(chatty=True)
+    await talkative.start()
+    try:
+        assert await wake.wake("01THREAD", "mail arrived", url=talkative.url) is True
+    finally:
+        await talkative.stop()
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-    assert await wake.wake("01THREAD", "mail arrived") is True
-    assert seen["command"] == wake.PROXY  # the daemon is reached through codex itself, not a socket path we guess
-    assert seen["request"]["method"] == "turn/start"
-    assert seen["request"]["params"] == {
-        "threadId": "01THREAD",
-        "input": [{"type": "text", "text": "mail arrived"}],
-    }
+
+async def test_a_refusal_is_quiet() -> None:
+    """No such thread is the ordinary answer for a session that is not under an app-server at all."""
+    refusing = FakeAppServer(refuse=True)
+    await refusing.start()
+    try:
+        assert await wake.wake("01THREAD", "mail arrived", url=refusing.url) is False
+    finally:
+        await refusing.stop()
 
 
 @pytest.mark.parametrize(
-    "answer",
-    [b'{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"no such thread"}}\n', b"", b"not json\n"],
-    ids=["refused", "silence", "gibberish"],
+    "url", ["ws://127.0.0.1:9", "ws://no-such-host.invalid:4500", "not a url at all"], ids=["closed", "unknown", "junk"]
 )
-async def test_every_way_of_failing_is_quiet(monkeypatch, answer: bytes) -> None:
-    """A session not running under the app-server daemon has no thread to find. That is not an error to report to
-    anybody: the mail is in the inbox, and a session that cannot be woken is one that reads it next time it acts."""
-
-    class Proxy:
-        returncode = 0
-
-        async def communicate(self, written: bytes) -> tuple[bytes, bytes]:
-            return answer, b""
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", lambda *a, **k: _resolved(Proxy()))
-    assert await wake.wake("01THREAD", "mail arrived") is False
+async def test_a_door_that_is_not_there_is_not_an_error(url: str) -> None:
+    """Nothing listening is the normal case: `codex` may not be running, may not be installed, and this may be a
+    Claude Code session that will never have an app-server at all. The mail waits in the inbox regardless."""
+    assert await wake.wake("01THREAD", "mail arrived", url=url, timeout=2) is False
 
 
-async def test_a_missing_codex_is_not_an_error(monkeypatch) -> None:
-    """`codex` may not be on PATH at all -- this is a Claude Code session as often as not."""
-
-    async def missing(*command, **kwargs):
-        raise FileNotFoundError("codex")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", missing)
-    assert await wake.wake("01THREAD", "mail arrived") is False
-
-
-def _resolved(value):
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
-    future.set_result(value)
-    return future
-
-
-async def test_an_arrival_wakes_the_session_once(endpoint: str, monkeypatch) -> None:
+async def test_an_arrival_wakes_the_session_once(endpoint: str, monkeypatch, app_server: FakeAppServer) -> None:
     """One wake drains any number of messages, because reading is a pull -- so a second arrival while the first
     wake is still in flight needs no policy to coalesce it, and gets none."""
-    monkeypatch.setenv(wake.WAKE_ENV, "1")
+    monkeypatch.setenv(wake.WAKE_ENV, app_server.url)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", f"wake-{endpoint.rsplit(':', 1)[1]}")
-    woken: list[tuple[str, str]] = []
-
-    async def record(thread: str, text: str, timeout: float = 0) -> bool:
-        woken.append((thread, text))
-        await asyncio.sleep(0.2)
-        return True
-
-    monkeypatch.setattr(wake, "wake", record)
 
     listener, talker = Backend(endpoint), Backend(endpoint)
     try:
@@ -115,9 +183,9 @@ async def test_an_arrival_wakes_the_session_once(endpoint: str, monkeypatch) -> 
         await talker.resolve(None).send("second", name="ann")
         await asyncio.sleep(SETTLE)
 
-        assert len(woken) == 1
-        thread, text = woken[0]
-        assert thread == "01THREAD"
+        turns = [r for r in app_server.requests if r.get("method") == "turn/start"]
+        assert len(turns) == 1
+        text = turns[0]["params"]["input"][0]["text"]
         # It says who is speaking: an alarm that reads like the user talking is worse than no alarm.
         assert "check_inbox" in text and "Nobody typed this" in text
         assert FORUM in text
@@ -128,23 +196,18 @@ async def test_an_arrival_wakes_the_session_once(endpoint: str, monkeypatch) -> 
         talker.close()
 
 
-async def test_nothing_is_woken_without_a_thread_or_an_opt_in(endpoint: str, monkeypatch) -> None:
+async def test_nothing_is_woken_without_a_thread_or_an_opt_in(
+    endpoint: str, monkeypatch, app_server: FakeAppServer
+) -> None:
     """Two independent conditions, because either alone would be a session woken by surprise."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", f"quiet-{endpoint.rsplit(':', 1)[1]}")
-    woken: list[str] = []
-
-    async def record(thread: str, text: str, timeout: float = 0) -> bool:
-        woken.append(thread)
-        return True
-
-    monkeypatch.setattr(wake, "wake", record)
 
     listener, talker = Backend(endpoint), Backend(endpoint)
     try:
         await listener.connect(FORUM, "ann")
         await talker.connect(FORUM, "bob")
 
-        monkeypatch.setenv(wake.WAKE_ENV, "1")  # asked for, but nothing knows how to reach this session
+        monkeypatch.setenv(wake.WAKE_ENV, app_server.url)  # a door, but nothing knows how to name this session
         listener.notices.thread = None
         await talker.resolve(None).send("no thread", name="ann")
         await asyncio.sleep(SETTLE)
@@ -154,7 +217,7 @@ async def test_nothing_is_woken_without_a_thread_or_an_opt_in(endpoint: str, mon
         await talker.resolve(None).send("no opt-in", name="ann")
         await asyncio.sleep(SETTLE)
 
-        assert woken == []
+        assert app_server.requests == []
     finally:
         await listener.disconnect_all()
         await talker.disconnect_all()

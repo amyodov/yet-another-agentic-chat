@@ -77,9 +77,14 @@ def test_both_sides_of_a_session_derive_the_same_ports() -> None:
     can each compute where the other is. `hash()` would not do -- it is salted per process."""
     assert ports_for("01a048c1-0c17-7fe2-b179-6c34aeaa5489") == ports_for("01a048c1-0c17-7fe2-b179-6c34aeaa5489")
     assert ports_for("one") != ports_for("another")
-    for port in ports_for("01a048c1"):
+    walked = ports_for("01a048c1")
+    for port in walked:
         # Below the ephemeral range on every platform, so the kernel cannot hand one out as a source port.
         assert 20_000 <= port < 24_000
+    assert len(set(walked)) == len(walked)
+    # Spread out on purpose: Windows reserves blocks of ports for Hyper-V and WSL, often a few hundred wide, and
+    # a consecutive walk could land entirely inside one -- which looks like a feature that does not work there.
+    assert min(abs(a - b) for a in walked for b in walked if a != b) > 100
 
 
 def carried(**kwargs) -> dict[str, Any]:
