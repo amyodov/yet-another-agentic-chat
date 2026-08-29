@@ -289,22 +289,32 @@ Settled in discussion with Alex; build only when told, ask before deviating. The
   session can already read another's transcript from disk, so YAAC cannot add a boundary the OS does not have.
   Identity mechanisms exist to prevent accidents and default misuse by well-behaved participants — never to stop a
   determined session, and they must not claim otherwise.
+- **`peer_secret` gates `send` and `peers`, not only inbox reads.** Every call that acts as the peer carries it;
+  the pair is returned by `join_channel` and presenting it again resumes the same peer after a client restart.
+  It buys no boundary the OS lacks — that is the point of the honour-system framing — but it makes acting as
+  somebody else a deliberate act rather than an accident, which is the whole claim.
 - **`join_channel` will return a `peer_uid` + `peer_secret` pair.** The secret is an honor-system convention, not
   cryptography: a participant that did not receive it through the proper flow is not that peer. The backend verifies
   it locally against its own memberships; the hat cannot verify anything, since its state is rebuilt from `hello`
   after every changeover. Presenting the pair on join resumes the same peer after a client restart. Still open:
   whether the secret gates `send` and `peers` or only inbox reads, and whether `peer_uid` becomes a locator inside
   `from`/`to`.
-- **The world channel is `None`, not a name.** Omitted, null, or empty `channel` at the tool boundary all mean it,
-  and the description says so. Distinguished structurally so no user-chosen string can clash with it and no
-  English-centric default name exists. Costs to pay when building: the destination frame currently uses a null
-  channel to mean "don't cross-check", `hello` requires a string channel, and `list_channels` needs a row for it.
+- **The world channel is `None`, not a name — and is deferred, not cancelled.** It is a real scope, distinct from
+  the hat: `to: {}` is the operator, one recipient, mail the hat interprets; `to: {channel: null}` is everybody,
+  mail the hat relays. Its only unique capability is reaching a session that joined nothing, which is worth having
+  only if membership is automatic — and automatic membership means every session on the machine hears every shout.
+  Neither trade is worth taking before something needs it. The serializer's null-vs-absent discipline ships anyway,
+  since `from: {}` needs it, so adding this later is an addition rather than a wire change. Costs recorded at the
+  time: the destination frame currently uses a null channel to mean "don't cross-check", `hello` requires a string
+  channel, and `list_channels` needs a row for a channel with no name to print.
 - **A message becomes an object, not a string**: `payload` (any JSON — the tool description must say it may be
   anything; the readers are agents and will adapt), `tags` (topic), `mentions` (who is called on to react — while
   everyone in the delivery scope still hears it). Delivery scope (`to`) and social addressing (`mentions`) are
   separate things: a whisper stays private-scope, and mentioning someone on the open channel is heard by all, like
   radio. There is no urgency mechanism; being mentioned is the attention signal, and any loudness convention is a
-  tag.
+  tag. At the tool boundary `body` stays as it is, and `payload` is optional beside it: most messages are a
+  sentence, and routing every plain send through a field described as "anything" would make models quote strings
+  inconsistently for no gain.
 - **`from` and `to` are scope objects** whose fields compose: `{channel}` broadcasts to it, `{peer}` whispers,
   `{channel, peer}` is that peer as a member of that channel, and `to: {}` — no scope at all — addresses whoever
   wears the hat, for technical asks; symmetrically `from: {}` marks infrastructure messages such as bounces
