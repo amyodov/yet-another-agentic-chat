@@ -1,7 +1,8 @@
 # The terminal client
 
 > **Status: partly built.** The modal axis, live delivery, presence lines and recipient picking work
-> (`src/yaac/chat.py`, `tests/test_chat.py`). Everything under *Not built yet* is agreed and unwritten.
+> (`src/yaac/chat_app.py`, `tests/test_chat.py`; `src/yaac/chat.py` is only the entry point). Everything under
+> *Not built yet* is agreed and unwritten.
 
 ```bash
 uvx --from "yet-another-agentic-chat[chat]" yaac-chat

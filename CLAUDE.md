@@ -29,13 +29,22 @@ never the Claude Code feature of the same name.
 
 ```
 src/yaac/
-  frontend.py   MCP tool definitions, and the tool a Claude Code hook calls
+  frontend.py   MCP tool definitions, and the tool a hook calls
   backend.py    sockets, bind election, receive loops, connection state
-  hat.py        routing table, whois, roster, bounce
+  hat.py        routing table, whois, roster, bounce, session directory
   protocol.py   envelope + control messages, serialization
+  notices.py    each session's own WebSocket: what a watcher streams and a hook asks
+  directory.py  the client side of `sessions` — who is running here, asked at the rendezvous point
+  hook.py       `yaac-hook`, the program Codex runs because its hooks cannot call a tool
+  wake.py       starting a turn in an idle Codex session through its app-server
+  processes.py  the process tree: ancestry, and command lines, on all three OSes
   chat.py       the terminal client's entry point; imports textual only once it knows it is there
   chat_app.py   the terminal client itself
 ```
+
+The last five are all delivery: getting a message in front of a session that did not ask for it. Nothing in them
+touches the wire — the hat is not involved and there is no second process to find, because the hook runs inside
+the process that owns the inbox.
 
 Python 3.14+, `uv`, `ruff`. Dependencies are `pyzmq` and `mcp` — ask before adding another.
 
@@ -89,7 +98,7 @@ Cross-client delivery is measured, not argued: a Claude Code session and a Codex
 ways on one channel, each running its own server process.
 
 **MCP cannot push into an idle session — read off the specification rather than measured here, and true of
-revision 2026-07-28, checked on 2026-08-28.** Every other entry in this section is a property of the world and
+revision 2026-07-28, re-checked on 2026-08-30 against the changelog with nothing changed.** Every other entry in this section is a property of the world and
 stays true; this one describes a document under active revision and will expire, so read the changelog rather
 than this line. What it says today is that the direction of travel is away from push: a server may not initiate
 a request at all, and the schema has no `ServerRequest` type to do it with; `sampling/createMessage`, roots and
@@ -97,6 +106,12 @@ logging are deprecated with a twelve-month window; and the one long-lived server
 `subscriptions/listen`, carries a closed set of four change notifications, three with empty parameters and one
 carrying a URI and no body. Delivery is therefore pull-only, which is why the tool descriptions have to carry
 the reminder to call `check_inbox`.
+
+The revision that introduced this went further in the same direction than the wording above suggests: it removed
+`initialize` and protocol-level sessions entirely, and **Multi Round-Trip Requests replaced server-initiated
+requests outright** — where a server once sent `sampling/createMessage`, `roots/list` or `elicitation/create`, it
+now returns `resultType: "input_required"` and waits for the client to retry. Every exchange is therefore begun
+by the client, by construction rather than by omission.
 
 The roadmap's Triggers & Events working group is about telling a client that work it started has finished, not
 about unsolicited content; the one proposal for re-entering a model's turn (SEP-2495) is open, unsponsored, and
@@ -146,12 +161,23 @@ that can reopen a finished turn. Text placed there is in the model's context, wh
 notification: `hook_report` takes the messages, exactly as `check_inbox` does, and a second `Stop` then finds an
 empty inbox, which is what makes a loop impossible without any `stop_hook_active` bookkeeping.
 
+`SessionStart` is the fourth, and the only one that answers the opposite problem: not that something arrived, but
+that what the model held is gone. Read off the documentation on 2026-08-30 — it fires with `source` in
+`startup`, `resume`, `clear`, `compact`, `fork`, and for that event "Claude Code adds plain-text stdout as
+context that Claude can see and act on". So the plugin matches `compact` alone, since no other source means
+anything was lost, and `hook_report` hands back the memberships instead of the inbox. The mail is deliberately
+left unread there: a session that cannot present its `peer_secret` cannot act on a message yet. `PreCompact` and
+`PostCompact` also exist, but the documentation does not say either injects context, and `SessionStart` says it
+does.
+
 **A peer older than a control message answers nothing, and only ordering reveals it.** A 0.3.0 hat logs
-`ignoring control message 'unread?'` and never replies, so a lone query waits out its whole timeout. Nothing
-depends on this today, but it is the trap waiting for the envelope work in `docs/zmq.md`: pair a new query with
-one every version has answered — `channels?` — and rely on a ROUTER handling one peer's messages in order, so a
-`channels` reply arriving with no answer before it proves the peer read the new query and had nothing to say.
-Measured against a real 0.3.0 hat, that turned a 1.0 s timeout into 0.13 s.
+`ignoring control message 'unread?'` and never replies, so a lone query waits out its whole timeout. This is the
+trap `sessions` walked straight into in 0.5.1, where it cost a hook the full timeout on every event for as long
+as an older peer kept the hat. The technique: pair a new query with one every version has answered — `channels`
+— and rely on a ROUTER handling one peer's messages in order, so a `channels` reply arriving with no answer
+before it proves the peer read the new query and had nothing to say. Measured against a real 0.3.0 hat, that
+turned a 1.0 s timeout into 0.13 s. `directory.py` now does this, and `test_directory.py` holds a hat that
+answers `channels` and not `sessions` so the next wire addition inherits the test rather than the bug.
 
 **A connect to a closed local port does not fail fast on Windows.** Measured in the field by Vadim: walking
 eight candidate ports cost 8.2 s on every hook event, where the same walk on macOS and Linux is immediate --
@@ -225,7 +251,8 @@ means one conversation can address another's connection, so `check_inbox` requir
 
 The wire format itself is specified in `docs/message-format.md`; this section is the rules for code that touches it.
 `docs/zmq.md` keeps the reasoning behind the envelope system rather than a plan for it — it shipped in 0.5.0, and
-version 2 does not bridge to version 1.
+version 2 does not bridge to version 1. Both sides name the version they saw when they disagree, because a
+mismatch otherwise reads as an empty net rather than as a disagreement.
 
 `protocol.dumps` is the only serializer, and it stamps `yaac: PROTOCOL_VERSION` first on every top-level dict. That
 ordering is the point: every message opens with `{"yaac":2`, a magic number a reader can key on without parsing. No
@@ -340,11 +367,6 @@ Settled in discussion with Alex; build only when told, ask before deviating.
   session can already read another's transcript from disk, so YAAC cannot add a boundary the OS does not have.
   Identity mechanisms exist to prevent accidents and default misuse by well-behaved participants — never to stop a
   determined session, and they must not claim otherwise.
-- **Built on 2026-08-29:** the envelope system (one shape for every message,
-  scopes that compose, `mentions` and `tags` as envelope fields, `payload` beside `body`), and peer identity
-  (`peer_uid`, `peer_secret`, resume after a restart). `docs/message-format.md` is the reference; `docs/zmq.md`
-  keeps the reasoning. Version 2 does not bridge to version 1, and both sides name the version they saw, because
-  a mismatch otherwise reads as an empty net rather than as a disagreement.
 - **Docs examples use the classical cast** — Alice, Bob, Carol; the hat-sees-everything caveat is "the hat is Eve
   by construction". One side note keeps a non-ASCII name to show names are unrestricted.
 

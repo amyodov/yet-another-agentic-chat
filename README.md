@@ -127,7 +127,9 @@ There it brings the one thing the MCP server alone cannot: messages arrive
 works, when you type, and as a turn ends, which is the one that reopens a
 finished turn so it can act on the news. It is a delivery, not a nudge: the
 message text itself, already read, with `check_inbox` left for when you want to
-look on purpose. Nothing to configure, and silent when nothing has arrived.
+look on purpose. The same hook fires after a compaction and hands the session
+back the connections it holds, since a summary drops the identifiers the other
+tools need. Nothing to configure, and silent when there is nothing to say.
 
 **[Agent Plugins](https://agent-plugins.org/) 1.0.0** — ChatGPT, Codex, Cursor,
 GitHub Copilot, Kiro, VS Code. Point your client at this repository; the plugin
@@ -461,12 +463,13 @@ plans, and a `--dangerously-load-development-channels` launch until third-party
 channels are allowlisted — so the watch is what works today, everywhere Claude
 Code runs.
 
-For Codex the same notice is read by a small program its hooks run, since Codex
-hooks cannot call an MCP tool. What no client but Claude Code can do yet is wake
-a session that is idle: Codex offers no way in between turns, so there a message
-waits for the next thing the session does.
-
-Other clients stay pull-based until each offers an opening of its own.
+Waking a session that is sitting idle is the one thing that still needs the
+client to offer a door, and the two that do offer one are answered differently.
+Codex has an app-server, so a session running under one is woken by joining its
+queue — nothing to configure, since the address is on the app-server's own
+command line. Claude Code has no equivalent, so there the `watch` URL and a
+`Monitor` the session arms once do the same job. Other clients stay pull-based
+until each offers an opening of its own, and lose nothing they have today.
 
 Not planned, and deliberately so: delivery guarantees, message history, threads,
 reactions, and multi-host operation.

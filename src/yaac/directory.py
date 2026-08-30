@@ -36,10 +36,23 @@ def directory(endpoint: str = DEFAULT_ENDPOINT, timeout_ms: int = TIMEOUT_MS) ->
     asking.setsockopt(zmq.LINGER, 0)
     asking.setsockopt(zmq.RCVTIMEO, timeout_ms)
     asking.setsockopt(zmq.ROUTING_ID, protocol.new_ulid().encode("ascii"))
+    answer = None
     try:
         asking.connect(endpoint)
+        # `sessions` first, then a question every version has ever answered. A hat too old to know `sessions`
+        # logs it and says nothing, so a lone query would wait out the whole timeout on every hook event, for as
+        # long as that peer keeps the hat. A ROUTER handles one peer's messages in order, so a `channels` reply
+        # arriving with no `sessions` answer ahead of it proves the peer read the query and had nothing to say.
         asking.send(protocol.dumps(protocol.sessions_query().to_wire()))
-        answer = protocol.Envelope.from_wire(protocol.parse(asking.recv()))
+        asking.send(protocol.dumps(protocol.channels_query().to_wire()))
+        while True:
+            heard = protocol.Envelope.from_wire(protocol.parse(asking.recv()))
+            if heard.op == "sessions":
+                answer = heard
+                break
+            if heard.op == "channels":
+                logger.info("%s answers channels but not sessions; too old for the directory", endpoint)
+                return []
     except (zmq.ZMQError, ValueError) as exc:
         logger.info("no answer from %s: %s", endpoint, exc)
         return []
@@ -47,7 +60,7 @@ def directory(endpoint: str = DEFAULT_ENDPOINT, timeout_ms: int = TIMEOUT_MS) ->
         asking.close()
         context.term()
 
-    if answer.op != "sessions" or not isinstance(answer.payload, dict):
+    if not isinstance(answer.payload, dict):
         return []
     listed = answer.payload.get("sessions")
     return listed if isinstance(listed, list) else []

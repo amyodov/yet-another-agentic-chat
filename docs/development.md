@@ -6,8 +6,8 @@ client's next restart with no reinstall:
 ```bash
 git clone https://github.com/amyodov/yet-another-agentic-chat
 cd yet-another-agentic-chat
-uv sync
-uv run pytest        # ~25 s
+uv sync --all-extras   # without --all-extras the terminal client's tests are not collected at all
+uv run pytest        # a minute or so; most of it is real sockets settling
 uv run ruff check . && uv run ruff format .
 ```
 

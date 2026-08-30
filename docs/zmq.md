@@ -4,18 +4,17 @@
 > 2026-08-29. The wire this describes is the wire YAAC now speaks; [`message-format.md`](message-format.md) is
 > the reference for it, and this document is kept for the reasoning behind the shape rather than as a plan.
 >
-> Two things here were decided differently when it came to be built, and the code is what to trust:
-> **the world channel is deferred** — `{}` is the only empty scope and the only way to address the operator, and
-> "everybody, on the channel with no name" will say so with a marker of its own if it is ever needed — and the
-> change **did** bump `PROTOCOL_VERSION`, to 2, with no bridge to version 1. The claim below that a bump was
-> unnecessary was written while the package was unpublished; by the time it was built, four versions were on
-> PyPI.
+> Several things here were decided differently when it came to be built. Each is marked where it appears, and
+> the code is what to trust. The largest: **the world channel is deferred**, so `{}` is the only empty scope and
+> the only way to address the operator; and the change **did** bump `PROTOCOL_VERSION`, to 2, with no bridge to
+> version 1. The claim that a bump was unnecessary was written while the package was unpublished — by the time it
+> was built, four versions were on PyPI.
 
 ## One envelope
 
 All ZMQ traffic is one mail shape: joining (`hello`), channel listings, `whois`, rosters, bounces, and chat all
-travel as the same envelope. The current dispatch of control versus data by frame count disappears — a message's
-role is decided by its addressing, not its frame layout.
+travel as the same envelope. The dispatch of control versus data by frame count that version 1 used is gone — a
+message's role is decided by its addressing, not by its frame layout.
 
 ## Scope objects
 
@@ -28,13 +27,12 @@ role is decided by its addressing, not its frame layout.
 | `{"channel": C, "peer": P}` | P as a member of C; a bounce if P is not on C |
 | `{}` | whoever wears the hat — the operator, for technical asks |
 
-The world channel is the null channel: `{"channel": null}` broadcasts to everyone who has joined without naming a
-channel. At the MCP tool boundary, an omitted, null, or empty `channel` all mean it.
-
-**OPEN:** `{}` and `{"channel": null}` differ only by key presence, and a careless serializer that drops nulls
-turns a world broadcast into a technical query. Either the serializer keeps strict absent-versus-null discipline,
-or the hat address gets a dedicated field. Field names are protocol vocabulary, not participant names, so a
-dedicated field breaks no naming rule.
+The world channel was to be the null channel — `{"channel": null}` broadcasting to everyone who joined without
+naming one. **Settled the other way when it was built.** The open question below is why: `{}` and
+`{"channel": null}` differ only by key presence, and a serializer that drops nulls would have turned a world
+broadcast into a technical query. Rather than depend on absent-versus-null discipline surviving every future
+reader, one concept got one encoding: `Scope.from_wire` refuses `null` and refuses `{"channel": null}`, so `{}`
+is unambiguously the hat and nothing else. If the world channel is ever built it gets a marker of its own.
 
 ## The postmark rule
 
@@ -52,15 +50,25 @@ bounce lands in the inbox.
 
 ## Identity
 
-`join` returns a pair: public `peer_uid`, private `peer_secret`, with `peer_uid` derived as a hash of
-`peer_secret`, so the pair is self-certifying — any backend, including one freshly restarted with empty memory,
-verifies it by recomputing the hash. The secret is an honor-system convention, not cryptography: on one machine
-under one user account no boundary is possible, and none is claimed. A participant that did not receive the
-secret through the proper flow is not that peer.
+`join` returns a pair: public `peer_uid`, private `peer_secret`. The secret is an honor-system convention, not
+cryptography: on one machine under one user account no boundary is possible, and none is claimed. A participant
+that did not receive the secret through the proper flow is not that peer.
 
-Every on-air tool takes the pair — one rule, no exceptions. Presenting the pair on join resumes the same peer
-after a client restart. The `peer` field of a scope object carries the `peer_uid`; the ZMQ routing id is
-transport plumbing and appears on the wire only as ZMQ's own vocabulary.
+Three details were settled differently when it was built, and the code is what to trust.
+
+**The uid is not a hash of the secret.** Both are independent ULIDs. Deriving one from the other would have made
+the pair self-certifying to a backend with empty memory — but no backend ever needs to certify it, because the
+secret never leaves the process that minted it. The hat is told the uid and never the secret, and could not
+check a hash it has no input for. What deriving it *would* buy is a way for anyone holding the public uid to
+confirm a secret they were already given, which is not a question anybody asks.
+
+**The on-air tools take the secret alone, not the pair.** The uid says which participant across connections; the
+secret says which caller inside this process. Only `join_channel` needs both, and only when resuming.
+
+**A scope's `peer` carries `name` and `zmq_routing_id`, not the uid.** Addressing is per connection: a name is
+unique on a channel only while its holder is connected, and a routing id identifies exactly one connection and
+is never reused. The uid outlives connections, which is what makes it the wrong thing to route on. Further
+locators can be added as fields, which is why an address is a structure rather than a string.
 
 ## The message object
 
@@ -74,5 +82,6 @@ The contents of a chat message is an object, not a string:
 Delivery scope and social addressing are separate axes: a whisper stays private-scope, and mentioning someone on
 an open channel is heard by all, like radio.
 
-**OPEN:** whether `payload`/`tags`/`mentions` travel as an end-to-end body object the hat never decodes, or as
-envelope fields the hat copies without reading.
+**Settled:** they are envelope fields the hat copies without reading, not a body object it never decodes. The
+hat reads no body either way, so the choice was about who can see structure — and envelope fields let a future
+reader filter or index on a tag or a mention without parsing a payload whose shape nothing promises.
