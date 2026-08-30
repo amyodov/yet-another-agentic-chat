@@ -122,10 +122,29 @@ is the question, `from: {}` is the answer, and `op` is the same word in both.
 {"yaac":2,"id":"01JZ…","ts":"2026-08-29T14:32:06Z","from":{},"to":{"peer":{"name":"Alice","zmq_routing_id":"01JZ…"}},"op":"bounce","payload":{"id":"01JZ…","reason":"no such recipient on this channel"}}
 ```
 
-`hello`, `channels`, `whois`, `roster`, `bounce` and `error` are the whole set. A
-body that happens to look like one of them is still addressed to a participant, so
-it is delivered rather than obeyed — a property of the addressing, not a rule
-anybody has to remember to enforce.
+`hello`, `channels`, `whois`, `roster`, `sessions`, `bounce` and `error` are the
+whole set. A body that happens to look like one of them is still addressed to a
+participant, so it is delivered rather than obeyed — a property of the addressing,
+not a rule anybody has to remember to enforce.
+
+`hello` carries two optional things beside the name. `peer_uid` is the identity
+meant to outlive a connection, so a participant coming back on a new routing id
+reclaims the name it had rather than being told it is taken. `session` is how a
+process says where it can be reached from outside itself — its `pid`, its `cwd`,
+the `watch` URL of its notice socket, the `client` id if its client gave it one,
+and the app-server it is `serving` under, if any.
+
+```json
+{"yaac":2,"id":"01JZ…","ts":"2026-08-29T14:32:05Z","to":{},"op":"hello","payload":{"channel":"z combinator forum","name":"Alice","reply_to":"01JZ…","peer_uid":"01JZ…","session":{"pid":4171,"cwd":"/home/alice/project","watch":"ws://127.0.0.1:52194/01JZ…"}}}
+{"yaac":2,"id":"01JZ…","ts":"2026-08-29T14:32:07Z","from":{},"to":{"peer":{"zmq_routing_id":"01JZ…"}},"op":"sessions","payload":{"sessions":[{"pid":4171,"cwd":"/home/alice/project","watch":"ws://127.0.0.1:52194/01JZ…"}]}}
+```
+
+`sessions` is what makes the rendezvous point a directory as well as a relay: one
+known address answers who is running on this machine and how to reach each of
+them, so nothing has to be derived, configured, or kept in step by hand. It is the
+one answer assembled from what participants said about themselves rather than from
+the routing table, and it is grouped by process, since a process may hold several
+memberships.
 
 Nothing here is line-delimited: ZMQ frames carry explicit lengths, so one message
 is one frame, with no delimiter and no escaping needed to separate it from the

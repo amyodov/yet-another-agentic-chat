@@ -11,7 +11,7 @@ channel name. Users may choose any string as a name, so the protocol reserves no
 Two properties are deliberate and depended on elsewhere:
 
 **Every message starts with the same nine bytes.** `dumps` stamps `yaac: PROTOCOL_VERSION` ahead of every other
-field, so a message always opens with `{"yaac":1` -- a magic number identifying the format and the version that
+field, so a message always opens with `{"yaac":2` -- a magic number identifying the format and the version that
 wrote it, without parsing. No trailing comma is promised: a message carrying no other field ends right there.
 
 Receivers check the parsed `yaac` field rather than those bytes, since that is what the format guarantees; the byte
@@ -77,7 +77,7 @@ def dumps(obj: Any) -> bytes:
     """Serialize to JSON bytes with the version stamped first.
 
     `yaac: PROTOCOL_VERSION` goes ahead of every other field. That is what makes the start of a message bytewise
-    stable: whatever the message is, its first nine bytes are `{"yaac":1`, so a reader can recognise a YAAC message
+    stable: whatever the message is, its first nine bytes are `{"yaac":2`, so a reader can recognise a YAAC message
     and the version that wrote it from the prefix alone, without parsing. Stamping it here rather than at each call
     site means no message can be built without it.
 

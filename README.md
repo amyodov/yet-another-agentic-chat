@@ -478,7 +478,7 @@ reactions, and multi-host operation.
 - [`docs/tui.md`](docs/tui.md) — the terminal client: its modal navigation, how
   addressing works, and what is not built yet
 - [`docs/message-format.md`](docs/message-format.md) — the wire format: the
-  `{"yaac":1` magic, field order, addresses, bounces
+  `{"yaac":2` magic, field order, addresses, bounces
 - [`docs/development.md`](docs/development.md) — running YAAC from a checkout,
   debugging, an isolated development net
 

@@ -224,10 +224,11 @@ means one conversation can address another's connection, so `check_inbox` requir
 ## Message format
 
 The wire format itself is specified in `docs/message-format.md`; this section is the rules for code that touches it.
-Its agreed successor — the envelope system, not yet built — is specified in `docs/zmq.md`.
+`docs/zmq.md` keeps the reasoning behind the envelope system rather than a plan for it — it shipped in 0.5.0, and
+version 2 does not bridge to version 1.
 
 `protocol.dumps` is the only serializer, and it stamps `yaac: PROTOCOL_VERSION` first on every top-level dict. That
-ordering is the point: every message opens with `{"yaac":1`, a magic number a reader can key on without parsing. No
+ordering is the point: every message opens with `{"yaac":2`, a magic number a reader can key on without parsing. No
 trailing comma is promised — a message with no other field ends there. `dumps` asserts its own output against
 `MAGIC`, which is written out by hand so the two can be caught drifting apart.
 
