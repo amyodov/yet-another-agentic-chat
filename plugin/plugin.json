@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "yaac",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Messaging between concurrent AI coding sessions, across clients, over MCP. Zero infrastructure. (YAAC: Yet Another Agentic Chat.)",
   "author": {
     "name": "Alex Myodov",
