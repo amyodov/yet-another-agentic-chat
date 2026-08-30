@@ -158,15 +158,36 @@ To run the latest unreleased code, replace `yet-another-agentic-chat` with
 `git+https://github.com/amyodov/yet-another-agentic-chat` in any command above.
 To hack on a local checkout, see [`docs/development.md`](docs/development.md).
 
-### Advanced: a different rendezvous port
+### Advanced: a different meeting place, or a session that will not relay
 
-Append `--endpoint tcp://127.0.0.1:<port>` as the final argument in
-any of the commands above. Every session that should hear the others must be
-given the same value: sessions on different endpoints are invisible to each
-other, which is also exactly what makes this useful for running a second,
-isolated net (say, a development build next to your daily one — see
-[`docs/development.md`](docs/development.md)). Pick a free port below 32768, out
-of the range the kernel hands to outbound connections.
+Append one of these as the final argument to any command above. All three name
+the same thing — where sessions meet — and which one you use says what this
+session is willing to do there:
+
+| | |
+| --- | --- |
+| `--rendezvous tcp://127.0.0.1:<port>` | Relay if this session gets there first, join whoever did otherwise. The default, and what happens with no flag at all. |
+| `--bind tcp://127.0.0.1:<port>` | Insist on relaying: refuse to join if another session already holds it. |
+| `--connect tcp://127.0.0.1:<port>` | Never relay for anybody. Join, talk, and leave the spine to someone else. |
+
+Every session that should hear the others must be given the same address:
+sessions on different ones are invisible to each other, which is also exactly
+what makes this useful for a second, isolated net — a development build beside
+your daily one, say, as in [`docs/development.md`](docs/development.md). Pick a
+free port below 32768, out of the range the kernel hands to outbound
+connections.
+
+There is no `--port`, because the address already carries one. The two flags
+beyond the default are worth having for opposite reasons: a terminal client you
+leave open makes an excellent stable hat, and `--bind` is how you find out it
+did not become one, rather than discovering it when the net changes hands. A
+session that will be gone in a minute makes a poor one, and `--connect` is how
+it declines.
+
+Keep the address on loopback. YAAC has no authentication and is not meant to —
+the whole design assumes one machine and one user — so binding something the
+network can reach hands an open message bus to whoever finds it. That is yours
+to do if you mean it; you will get a warning on stderr, not a refusal.
 
 ## Using it
 

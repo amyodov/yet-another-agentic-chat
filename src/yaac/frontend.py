@@ -42,7 +42,9 @@ from .backend import (
     ConnectionRefused,
     Membership,
     NotConnected,
+    add_rendezvous_flags,
     check_zmq_capabilities,
+    chosen_rendezvous,
     configure_logging,
 )
 from .hook import envelope, silence
@@ -65,6 +67,7 @@ mcp = MCPServer(
 # created no files.
 _radio: Backend | None = None
 _endpoint: str = DEFAULT_ENDPOINT
+_role: str = "rendezvous"
 
 # Clients that do not implement notifications/tools/list_changed, keyed by the clientInfo.name they send at
 # initialize. They are given every tool at connect, because a tool published later is one they will never see.
@@ -142,7 +145,7 @@ def radio() -> Backend:
     """Return the process's Backend, constructing it on first use so a server that never connects stays inert."""
     global _radio
     if _radio is None:
-        _radio = Backend(_endpoint)
+        _radio = Backend(_endpoint, role=_role)
     return _radio
 
 
@@ -670,23 +673,17 @@ async def _announce_tool_change(ctx: Context) -> None:
 
 def main() -> None:
     """Console entry point. Parses arguments, checks pyzmq, and serves MCP over stdio. Writes nothing to stdout."""
-    global _endpoint
+    global _endpoint, _role
 
     parser = argparse.ArgumentParser(
         prog="yaac",
         description="A radio for agentic sessions. Run as an MCP server over stdio.",
     )
-    parser.add_argument(
-        "--endpoint",
-        default=DEFAULT_ENDPOINT,
-        help=(
-            "Rendezvous endpoint (default: %(default)s). Its real purpose is letting tests run an isolated "
-            "instance; nobody should need to set it."
-        ),
-    )
+    add_rendezvous_flags(parser)
     args = parser.parse_args()
-    _endpoint = args.endpoint
-    configure_logging()
+
+    configure_logging()  # before chosen_rendezvous, which may have a warning to give
+    _endpoint, _role = chosen_rendezvous(args)
 
     try:
         check_zmq_capabilities()

@@ -16,17 +16,26 @@ Point a client at the checkout with `uv run --directory`:
 ```bash
 claude mcp add yaac-dev -- \
   uv run --directory /path/to/yet-another-agentic-chat yaac \
-  --endpoint tcp://127.0.0.1:19117
+  --rendezvous tcp://127.0.0.1:19117
 ```
 
-The `--endpoint` is worth adding while developing: it puts your working copy on a
-separate rendezvous point, so a half-finished change cannot disturb the sessions
-you have on the released build, and the two nets stay invisible to each other.
+`--rendezvous` is worth adding while developing: it puts your working copy on a
+separate meeting place, so a half-finished change cannot disturb the sessions you
+have on the released build, and the two nets stay invisible to each other.
 
 `19117` is just the port after the default. Any free port below 32768 will do;
 staying under that range keeps the kernel from handing the same number out as the
 source port of some unrelated outbound connection, which would make the bind fail
 for reasons that have nothing to do with YAAC.
+
+`--bind` and `--connect` take the same address and differ only in what this
+session is willing to do at it — insist on relaying, or never relay. Both are
+useful while developing for the same reason: they turn "who is wearing the hat"
+from something you deduce from a log line into something you asked for.
+`--bind tcp://127.0.0.1:19117` on the session you want to keep as the relay fails
+immediately if a stale process is still holding the port, which is a quicker
+answer than wondering why your changes are not taking effect. `--endpoint` still
+works as a hidden alias for `--rendezvous`, since that was its name until 0.5.2.
 
 ## Debugging
 

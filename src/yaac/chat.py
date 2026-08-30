@@ -11,7 +11,7 @@ is a trap for everything that merely looks at it.
 
 import argparse
 
-from .backend import DEFAULT_ENDPOINT, check_zmq_capabilities, configure_logging
+from .backend import add_rendezvous_flags, check_zmq_capabilities, chosen_rendezvous, configure_logging
 
 NEEDS_TEXTUAL = (
     "yaac-chat needs textual, which ships as an optional extra so that an MCP-only install stays small.\n"
@@ -27,11 +27,14 @@ def main() -> None:
         prog="yaac-chat",
         description="Join a YAAC channel as a person, in a terminal window.",
     )
-    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT, help="Rendezvous endpoint (default: %(default)s).")
+    add_rendezvous_flags(parser)
     parser.add_argument("--channel", help="Channel to join at startup. Without it, the channel list opens first.")
     parser.add_argument("--name", help="Your name on that channel. Required with --channel.")
     args = parser.parse_args()
-    configure_logging()
+    configure_logging()  # before chosen_rendezvous, which may have a warning to give
+    # A window left open is the steadiest hat a net can have, since it outlives the agent sessions around it --
+    # so --bind is worth more here than anywhere, and --connect is for a window that only wants to listen.
+    endpoint, role = chosen_rendezvous(args)
     if bool(args.channel) != bool(args.name):
         parser.error("--channel and --name go together")
 
@@ -47,7 +50,7 @@ def main() -> None:
             raise
         raise SystemExit(NEEDS_TEXTUAL) from None
 
-    run(args.endpoint, args.channel, args.name)
+    run(endpoint, args.channel, args.name, role=role)
 
 
 if __name__ == "__main__":

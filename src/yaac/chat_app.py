@@ -66,11 +66,11 @@ class ChatApp(App):
     # Textual reserves that on App for its screen collection.
     AXIS = ("channels", "chat", "members")
 
-    def __init__(self, endpoint: str, channel: str | None, name: str | None) -> None:
+    def __init__(self, endpoint: str, channel: str | None, name: str | None, role: str = "rendezvous") -> None:
         super().__init__()
         self.endpoint = endpoint
         self.wanted = (channel, name)
-        self.radio = Backend(endpoint)
+        self.radio = Backend(endpoint, role=role)
         self.membership: Membership | None = None
         self.recipient: str | None = None  # None means everyone; direct is the default once a peer is picked
         self.present: list[str] = []  # last roster seen, so the next one can be diffed into arrivals and departures
@@ -341,10 +341,10 @@ class ChatApp(App):
         self.radio.close()
 
 
-def run(endpoint: str, channel: str | None, name: str | None) -> None:
+def run(endpoint: str, channel: str | None, name: str | None, role: str = "rendezvous") -> None:
     """Start the window. Called by `chat.main`, which has already parsed arguments and checked pyzmq."""
     # zmq.asyncio needs loop.add_reader, which Windows's default ProactorEventLoop lacks. Same constraint as the
     # MCP server, same fix, but Textual owns the loop, so the policy is set before the app takes over.
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
-    ChatApp(endpoint, channel, name).run()
+    ChatApp(endpoint, channel, name, role=role).run()

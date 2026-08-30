@@ -343,8 +343,15 @@ These rules cover everything written in words: comments, docstrings, commit mess
 
 ## Design notes
 
-- **The hat is put on by getting there first.** Soft state only, no policy, never configured, and it comes off when the
-    process exits.
+- **The hat is put on by getting there first.** Soft state only, no policy, and it comes off when the process
+  exits. Since 0.5.2 a session may say whether it is *racing* — `--bind` insists on winning and refuses to join
+  if it loses, `--connect` never tries — but neither decides *who* wins, and the default still races and settles
+  for either answer. Configuring the outcome would be a different thing, and is not built: a hat is still
+  whichever process reached the endpoint first.
+- **One address, three spellings, and no `--port`.** `--rendezvous`, `--bind` and `--connect` name the same
+  endpoint and differ only in policy, defined once in `backend.py` because both entry points offer them and a
+  drift between the two would be a net that behaves differently depending on which program reached it. A bare
+  port is what makes a wildcard bind easy to type by accident, so there is nothing to type it into.
 - **The hat connects its own DEALER to its own ROUTER.** Costs one socket, and keeps a single send path — no "am I
   the hat" branch anywhere.
 - **Probing must not bind.** If `list_channels` bound, a session that only looked would become hat and drop the

@@ -7,7 +7,13 @@ from typing import Any
 import pytest
 
 from yaac import frontend
-from yaac.backend import AmbiguousConnection, Backend, ConnectionRefused, NotConnected
+from yaac.backend import (
+    AmbiguousConnection,
+    Backend,
+    ConnectionRefused,
+    NotConnected,
+    reachable_from_elsewhere,
+)
 from yaac.protocol import Envelope
 
 FORUM = "forum"
@@ -263,6 +269,65 @@ async def test_joining_a_name_this_process_already_holds_hands_it_back(radios: R
     loser = radios()
     with pytest.raises(ConnectionRefused, match="taken"):
         await loser.connect(FORUM, "ann")
+
+
+@pytest.mark.parametrize("role,expects_hat", [("rendezvous", True), ("bind", True), ("connect", False)])
+async def test_the_role_decides_whether_a_session_relays(endpoint: str, role: str, expects_hat: bool) -> None:
+    """The hat is still taken by getting there first; the role only says whether this session is racing.
+
+    `connect` is a session declining to be the spine of somebody else's net -- a short-lived one, or a worktree
+    that will be gone in a minute. It joins and talks normally; it simply never binds.
+    """
+    radio = Backend(endpoint, role=role)
+    partner = Backend(endpoint)  # somebody has to relay, or there is no net to test against
+    try:
+        if not expects_hat:
+            await partner.connect(FORUM, "bob")
+        await radio.connect(FORUM, "ann")
+        assert radio.is_wearing_hat is expects_hat
+    finally:
+        await radio.disconnect_all()
+        await partner.disconnect_all()
+        radio.close()
+        partner.close()
+
+
+async def test_bind_refuses_rather_than_quietly_joining(endpoint: str) -> None:
+    """The whole point of asking for it. Silently becoming an ordinary participant is the failure this flag
+    exists to make visible -- a session pinned as the stable relay that is not one looks identical until the
+    net changes hands underneath it."""
+    incumbent = Backend(endpoint)
+    insisting = Backend(endpoint, role="bind")
+    try:
+        await incumbent.connect(FORUM, "bob")
+        with pytest.raises(ConnectionRefused, match="already holds"):
+            await insisting.connect(FORUM, "ann")
+        # And it left nothing behind: a refused join is not a half-open membership.
+        assert insisting.memberships == {}
+    finally:
+        await incumbent.disconnect_all()
+        await insisting.disconnect_all()
+        incumbent.close()
+        insisting.close()
+
+
+@pytest.mark.parametrize(
+    "endpoint_given,public",
+    [
+        ("tcp://127.0.0.1:19116", False),
+        ("tcp://localhost:19116", False),
+        ("tcp://[::1]:19116", False),
+        ("tcp://0.0.0.0:19116", True),
+        ("tcp://192.168.1.5:19116", True),
+        ("tcp://*:19116", True),
+    ],
+    ids=["ipv4-loopback", "localhost", "ipv6-loopback", "wildcard", "lan", "zmq-wildcard"],
+)
+def test_an_address_others_could_reach_is_recognised(endpoint_given: str, public: bool) -> None:
+    """Not refused -- warned about. YAAC has no authentication and is not meant to, so a bind anyone can reach
+    hands an open message bus to whoever finds it. Somebody who means it is entitled to it; somebody who typed
+    it by accident would otherwise never be told."""
+    assert reachable_from_elsewhere(endpoint_given) is public
 
 
 async def test_one_process_holds_several_memberships_independently(radios: RadioFactory) -> None:

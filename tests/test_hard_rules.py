@@ -4,6 +4,7 @@ These assert properties the design would be broken without, and each one exists
 because getting it wrong is either invisible or catastrophic in production.
 """
 
+import argparse
 import asyncio
 import contextlib
 import io
@@ -18,7 +19,7 @@ from typing import Any
 import pytest
 
 from yaac import frontend
-from yaac.backend import ConnectionRefused, configure_logging
+from yaac.backend import ConnectionRefused, add_rendezvous_flags, chosen_rendezvous, configure_logging
 
 REPO = Path(__file__).resolve().parent.parent
 SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
@@ -535,6 +536,41 @@ async def test_a_mention_of_somebody_absent_is_carried_and_reported(monkeypatch)
     answer = await frontend.send("hi", mentions=["Bob", "Carol"])
     assert answer["status"] == "accepted"
     assert answer["mentioned_but_absent"] == ["Carol"]
+
+
+@pytest.mark.parametrize(
+    "given,endpoint,role",
+    [
+        ([], "tcp://127.0.0.1:19116", "rendezvous"),
+        (["--rendezvous", "tcp://127.0.0.1:1"], "tcp://127.0.0.1:1", "rendezvous"),
+        (["--bind", "tcp://127.0.0.1:2"], "tcp://127.0.0.1:2", "bind"),
+        (["--connect", "tcp://127.0.0.1:3"], "tcp://127.0.0.1:3", "connect"),
+        (["--endpoint", "tcp://127.0.0.1:4"], "tcp://127.0.0.1:4", "rendezvous"),
+    ],
+    ids=["default", "rendezvous", "bind", "connect", "the-old-name"],
+)
+@pytest.mark.parametrize("program", ["yaac", "yaac-chat"])
+def test_both_entry_points_read_the_same_three_flags(program: str, given: list[str], endpoint: str, role: str) -> None:
+    """One address, three spellings, and the same three wherever you type them.
+
+    Two programs join one net, so a flag that worked on one and not the other would be a net that behaves
+    differently depending on which reached it first. `--endpoint` is the name this had before it was one of
+    three; it is kept working and kept out of the help, so only one spelling is taught.
+    """
+    parser = argparse.ArgumentParser(prog=program)
+    add_rendezvous_flags(parser)
+    assert chosen_rendezvous(parser.parse_args(given)) == (endpoint, role)
+
+
+@pytest.mark.parametrize(
+    "given", [["--bind", "tcp://127.0.0.1:1", "--connect", "tcp://127.0.0.1:2"], ["--bind", "x", "--rendezvous", "y"]]
+)
+def test_two_of_the_three_at_once_is_refused(given: list[str]) -> None:
+    """They name one address and contradict each other about it, so there is no answer to pick."""
+    parser = argparse.ArgumentParser(prog="yaac")
+    add_rendezvous_flags(parser)
+    with pytest.raises(SystemExit):
+        parser.parse_args(given)
 
 
 def test_no_python_file_reads_or_writes_text_without_naming_the_encoding() -> None:

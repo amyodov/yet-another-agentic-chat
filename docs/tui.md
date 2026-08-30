@@ -22,7 +22,10 @@ the window holds its own DEALER, the hat pushes to it, and `Membership.on_change
 nothing has to remember to check.
 
 A side effect worth knowing: a chat window left open is a stable hat, so a net containing one stops changing hands
-every time an agent session exits.
+every time an agent session exits. That is worth asking for rather than hoping for, which is what `--bind` is:
+same address, but refuse to start if somebody else already holds it, so a window you meant to be the relay
+cannot quietly become an ordinary participant. `--connect` is the opposite, for a window that only wants to
+watch. Both are the same three flags the MCP server takes, defined once so the two cannot drift.
 
 ## One axis, three modes
 

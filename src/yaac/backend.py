@@ -22,6 +22,7 @@ States:
 * **on air** -- one or more memberships, and a ROUTER as well if this process won the bind.
 """
 
+import argparse
 import asyncio
 import contextlib
 import io
@@ -32,6 +33,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import zmq
 import zmq.asyncio
@@ -47,6 +49,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_ENDPOINT = "tcp://127.0.0.1:19116"
 """19116 is 0x4AAC. Chosen below the ephemeral port range so the kernel will not assign it as the source port of an
 unrelated outbound connection, which would make the bind fail for reasons unrelated to YAAC."""
+
+LOOPBACK = ("127.0.0.1", "::1", "localhost", "[::1]")
+"""Addresses that cannot be reached from another machine, which is the whole of what makes a bind safe here."""
 
 BIND_RETRY_SECONDS = 2.0
 HELLO_TIMEOUT_SECONDS = 5.0
@@ -86,6 +91,69 @@ def configure_logging() -> None:
 
 _UNASKED = "?"
 """Distinguishes "not looked yet" from "looked, and there is no app-server above us"."""
+
+
+def add_rendezvous_flags(parser: argparse.ArgumentParser) -> None:
+    """One address, three spellings, and which one was used is the policy.
+
+    Defined once because both entry points offer it and a drift between them would be a net that behaves
+    differently depending on which program joined it. There is no `--port`: the address carries it, and a bare
+    port is exactly what makes a wildcard bind easy to type without meaning to.
+    """
+    where = parser.add_mutually_exclusive_group()
+    where.add_argument(
+        "--rendezvous",
+        metavar="ENDPOINT",
+        help=(
+            f"Where sessions meet (default: {DEFAULT_ENDPOINT}). Relay for others if this one gets there first, "
+            "and join whoever did otherwise. Its real purpose is running an isolated net; nobody needs to set it."
+        ),
+    )
+    where.add_argument(
+        "--bind",
+        metavar="ENDPOINT",
+        help=(
+            "Same address, but insist on relaying: refuse to join if another session already holds it. For a "
+            "session meant to be the stable one, where quietly becoming an ordinary participant is the failure."
+        ),
+    )
+    where.add_argument(
+        "--connect",
+        metavar="ENDPOINT",
+        help="Same address, but never relay for anybody. For a short-lived session that should not be the spine.",
+    )
+    # The name this had before it was one of three. Kept working, and out of the help so only one is taught.
+    where.add_argument("--endpoint", metavar="ENDPOINT", help=argparse.SUPPRESS)
+
+
+def chosen_rendezvous(args: argparse.Namespace) -> tuple[str, str]:
+    """The endpoint and the role `add_rendezvous_flags` was given, with the warning that goes with a public one.
+
+    A warning rather than a refusal: somebody who types a wildcard on purpose is entitled to it, and this is the
+    only thing that would ever tell them what they did. YAAC has no authentication and is not meant to -- the
+    whole design assumes one machine and one user, which a reachable bind quietly stops being true.
+    """
+    role = "bind" if args.bind else "connect" if args.connect else "rendezvous"
+    endpoint = args.bind or args.connect or args.rendezvous or args.endpoint or DEFAULT_ENDPOINT
+    if role != "connect" and reachable_from_elsewhere(endpoint):
+        logger.warning(
+            "%s can be reached from another machine, and YAAC has no authentication of any kind: anyone who "
+            "reaches this port can read and send on every channel here",
+            endpoint,
+        )
+    return endpoint, role
+
+
+def reachable_from_elsewhere(endpoint: str) -> bool:
+    """Whether binding `endpoint` would put this net on the network rather than on this machine.
+
+    YAAC has no authentication and is not meant to have any: everything runs on one machine under one user, and
+    the privacy is convention. A wildcard bind would hand an unauthenticated message bus to anyone who can reach
+    the port, which multi-host being out of scope makes a mistake rather than a choice. Connecting outward is not
+    checked -- reaching a peer somebody else deliberately exposed is their decision, not ours to refuse.
+    """
+    host = urlparse(endpoint).hostname
+    return host is not None and host not in LOOPBACK
 
 
 class NotConnected(Exception):
@@ -381,8 +449,12 @@ class Membership:
 class Backend:
     """Process-level transport: the ZMQ context, the bind election, and every membership this process holds."""
 
-    def __init__(self, endpoint: str = DEFAULT_ENDPOINT) -> None:
+    def __init__(self, endpoint: str = DEFAULT_ENDPOINT, role: str = "rendezvous") -> None:
         self.endpoint = endpoint
+        # Whether this process may relay for others. "rendezvous" races for the endpoint and settles for either
+        # answer; "bind" insists on winning; "connect" never tries. The default is the only one that needs no
+        # explanation -- the other two exist because a silent fallback hides the answer from somebody who cared.
+        self.role = role
         self.ctx = zmq.asyncio.Context()
         self.router: zmq.asyncio.Socket | None = None
         self.hat: Hat | None = None
@@ -513,8 +585,15 @@ class Backend:
                 )
 
         membership = Membership(self, channel, name, peer_uid=peer_uid)
-        self._ensure_election_running()
-        self._try_bind()
+        # Nothing to retry for a session that will never bind, so it spawns no election loop at all.
+        if self.role != "connect":
+            self._ensure_election_running()
+        if not self._try_bind() and self.role == "bind":
+            self._release_if_idle()
+            raise ConnectionRefused(
+                f"another session already holds {self.endpoint}, and --bind asked to be the one relaying. "
+                "Leave it out to join whoever got there first."
+            )
         # Before `hello`, not after: the address goes out in that message, and a session that announced nothing
         # would be invisible to everything that cannot read a tool result.
         await self.notices.start()
@@ -599,9 +678,13 @@ class Backend:
         prevent the next bind. On Windows it sets SO_EXCLUSIVEADDRUSE instead (tcp_listener.cpp), because there
         SO_REUSEADDR would let a second bind of an actively-bound port succeed -- and the election would crown two
         hats.
+
+        Returns False without trying under `role="connect"`, which is how a session declines to relay for anybody.
         """
         if self.router is not None:
             return True
+        if self.role == "connect":
+            return False
         router = self.ctx.socket(zmq.ROUTER)
         router.setsockopt(zmq.ROUTER_MANDATORY, 1)  # unknown destination raises instead of dropping
         router.setsockopt(zmq.ROUTER_HANDOVER, 1)  # a reconnecting peer reclaims its routing id
