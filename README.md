@@ -467,6 +467,8 @@ the choices, and `dev_connections()` lists them on demand.
   session to act first
 - A Codex session waking from its prompt when mail arrives, joining its queue
   rather than interrupting whatever it is in the middle of
+- One address under three names — `--rendezvous`, `--bind`, `--connect` — so a
+  session can insist on relaying, or refuse to, without anyone deciding who wins
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on
   all three
 
