@@ -21,6 +21,7 @@ from yaac.backend import Backend
 from yaac.protocol import Address, Scope
 
 FORUM = "forum"
+OTHER = "standup"
 SETTLE = 0.4  # generous for loopback TCP, short enough to keep the suite quick
 
 RadioFactory = Callable[[], Backend]
@@ -222,6 +223,45 @@ async def test_each_client_is_answered_in_the_contract_it_reads(
     assert "bob → everyone: the field is recipient_group now" in context
     # Whichever door it came through, it was a delivery: the inbox agrees.
     assert listener.resolve(None).pending_count() == 0
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "PostCompact"])
+async def test_a_replaced_context_is_handed_back_what_it_was_holding(radios: RadioFactory, event: str) -> None:
+    """A compaction takes the connection id and the secret with it, leaving a session on the air and mute.
+
+    Claude Code adds a `SessionStart` hook's plain text to the context it starts the next turn with, and fires it
+    with `source: compact`. The hook runs in the process that owns the memberships, so nothing is recovered or
+    stored -- what the model lost is simply read back off state this process held all along.
+    """
+    listener = radios()
+    first = await listener.connect(FORUM, "ann")
+    second = await listener.connect(OTHER, "deputy")
+
+    said = (await hook(event))["hookSpecificOutput"]["additionalContext"]
+    for held in (first, second):
+        assert held.connection_id in said and held.peer_secret in said and held.peer_uid in said
+    # And what to do when it happens again, since the hook cannot promise to fire.
+    assert "join_channel" in said and "check_inbox" in said
+
+
+async def test_a_session_holding_nothing_is_told_nothing(radios: RadioFactory) -> None:
+    """The hook fires on every compaction, including in a session that never joined a channel -- where a report
+    about connections it does not have is noise charged to somebody's context."""
+    radios()
+    assert (await hook("SessionStart")) == {"suppressOutput": True}
+
+
+async def test_the_mail_is_left_for_check_inbox_when_the_context_was_replaced(radios: RadioFactory) -> None:
+    """A `Stop` hook delivers and consumes; this one must not. A model that has just lost its secret cannot act
+    on a message yet, so the mail stays in the inbox and the text asks for the `check_inbox` that reads it."""
+    listener = radios()
+    await listener.connect(FORUM, "ann")
+    talker = radios()
+    await talker.connect(FORUM, "bob")
+    await talker.resolve(None).send("still here?")
+
+    await hook("SessionStart")
+    assert listener.resolve(None).pending_count() == 1
 
 
 def _stdin(payload: dict[str, Any], encoding: str = "cp1251"):

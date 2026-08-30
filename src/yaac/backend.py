@@ -487,24 +487,20 @@ class Backend:
         live routing_id on that channel, or if no hat answers within HELLO_TIMEOUT_SECONDS.
         """
         for existing in self.memberships.values():
-            if peer_uid is not None and existing.peer_uid == peer_uid:
-                # Resuming inside the same process: the pair names a membership this process still holds, so hand
-                # back the one that exists rather than opening a second connection under the same identity.
-                self.verify(existing, peer_secret)
-                return Connection(
-                    connection_id=existing.routing_id,
-                    channel=existing.channel,
-                    name=existing.name,
-                    created=False,
-                    peers=existing.peer_names(),
-                    peer_uid=existing.peer_uid,
-                    peer_secret=existing.peer_secret,
-                )
-            if (existing.channel, existing.name) == (channel, name):
-                # Not a refusal: this process is already that participant, and the caller is inside this process.
-                # A model that lost its pair -- compacted context, a truncated answer, a fresh turn -- has no way
-                # back to a name it still holds, and refusing here leaves it deaf, mute, and unable to rejoin
-                # under a name nobody else can take. Observed in the wild within hours of 0.5.0.
+            # Either locator identifies a membership this process already holds: the uid a resuming caller kept,
+            # or the (channel, name) pair, which is what a caller who kept nothing still knows. Both hand back
+            # what exists rather than opening a second connection under one identity.
+            #
+            # Deliberately without `verify`. A model that lost its secret -- compacted context, a truncated
+            # answer, a fresh turn -- has no way back to a name it still holds, and refusing leaves it deaf,
+            # mute, and unable to rejoin under a name nobody else can take; observed in the wild within hours of
+            # 0.5.0. Asking for the secret here would also protect nothing, since omitting the uid walks around
+            # it, while refusing precisely the caller who remembered more. The boundary this side of the wire is
+            # the process, and the caller is already inside it.
+            if (peer_uid is not None and existing.peer_uid == peer_uid) or (existing.channel, existing.name) == (
+                channel,
+                name,
+            ):
                 logger.info("%r on %r asked to join again; handing back the membership it holds", name, channel)
                 return Connection(
                     connection_id=existing.routing_id,

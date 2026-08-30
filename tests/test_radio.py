@@ -367,22 +367,35 @@ async def test_a_peer_comes_back_to_its_own_name_after_a_restart(radios: RadioFa
         await stranger.connect(FORUM, "ann")
 
 
-async def test_rejoining_in_the_same_process_returns_the_membership_it_already_holds(radios: RadioFactory) -> None:
-    """Resuming is not the same as joining twice: the pair names a membership this process still holds, so the
-    answer is that membership rather than a second connection under one identity."""
+@pytest.mark.parametrize(
+    "remembers",
+    ["both", "uid-only", "uid-and-a-wrong-secret", "secret-only", "nothing"],
+)
+async def test_coming_back_works_however_much_the_caller_still_remembers(radios: RadioFactory, remembers: str) -> None:
+    """Resuming is not joining twice: the answer is the membership this process still holds, not a second
+    connection under one identity -- and how much of the pair the caller kept must not change that.
+
+    An earlier version asked for the secret when a `peer_uid` was presented and asked for nothing when it was
+    not, which refused precisely the caller who remembered more while protecting nothing: omitting the uid walked
+    around the check. What a compaction takes is arbitrary, so every subset has to lead back to the same place.
+    """
     backend = radios()
     first = await backend.connect(FORUM, "ann")
-    again = await backend.connect(FORUM, "ann", peer_uid=first.peer_uid, peer_secret=first.peer_secret)
-    assert (again.connection_id, again.peer_uid) == (first.connection_id, first.peer_uid)
+    knew = {
+        "both": {"peer_uid": first.peer_uid, "peer_secret": first.peer_secret},
+        "uid-only": {"peer_uid": first.peer_uid},
+        "uid-and-a-wrong-secret": {"peer_uid": first.peer_uid, "peer_secret": "not the one"},
+        "secret-only": {"peer_secret": first.peer_secret},
+        "nothing": {},
+    }[remembers]
+
+    again = await backend.connect(FORUM, "ann", **knew)
+    assert (again.connection_id, again.peer_uid, again.peer_secret) == (
+        first.connection_id,
+        first.peer_uid,
+        first.peer_secret,
+    )
     assert len(backend.memberships) == 1
-
-
-async def test_resuming_with_the_wrong_secret_is_refused(radios: RadioFactory) -> None:
-    """The gate is local and only ever local -- the hat is told nothing about secrets and could not check one."""
-    backend = radios()
-    first = await backend.connect(FORUM, "ann")
-    with pytest.raises(NotConnected, match="peer_secret"):
-        await backend.connect(FORUM, "ann", peer_uid=first.peer_uid, peer_secret="not the one")
 
 
 async def test_every_membership_gets_its_own_pair(radios: RadioFactory) -> None:

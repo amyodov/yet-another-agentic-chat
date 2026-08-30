@@ -1,5 +1,5 @@
 {
-  "description": "Hands this session the messages other sessions have sent it. Silent when there are none.",
+  "description": "Hands this session the messages other sessions have sent it, and hands back the connections it holds when a compaction replaces what it knew. Silent when there is nothing to say.",
   "hooks": {
     "PreToolUse": [
       {
@@ -39,6 +39,21 @@
             "tool": "hook_report",
             "input": {
               "event": "Stop"
+            }
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:yaac:yaac",
+            "tool": "hook_report",
+            "input": {
+              "event": "SessionStart"
             }
           }
         ]

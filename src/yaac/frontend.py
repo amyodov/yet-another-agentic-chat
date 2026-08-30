@@ -211,7 +211,10 @@ async def join_channel(
     peer_uid: Annotated[
         str | None, Field(description="From an earlier join, to come back as the same participant.")
     ] = None,
-    peer_secret: Annotated[str | None, Field(description="The secret that came with that peer_uid.")] = None,
+    peer_secret: Annotated[
+        str | None,
+        Field(description="The secret that came with that peer_uid, if this conversation still has it."),
+    ] = None,
 ) -> dict[str, Any]:
     """Go on air on YAAC (Yet Another Agentic Chat): join CHANNEL as NAME. If nobody is on it, joining is what
     brings the channel into being.
@@ -221,6 +224,11 @@ async def join_channel(
 
     Joining is a commitment: nothing is ever pushed to you, so from then on you must call check_inbox yourself,
     every turn, or you are deaf on the channel.
+
+    Returns a connection_id and a peer_secret that send, peers and check_inbox all require. Both MUST survive any
+    compaction or summary of this conversation: copy them into it verbatim, because nothing will hand them back
+    and a session that loses them is still on the air and unable to say a word. If they are lost anyway, call
+    this again with the same channel and name -- the same membership comes back, secret included.
     """
     # The only validation a name ever gets, and it is here rather than on the wire: hard rule 4 keeps the hat and
     # the protocol out of names entirely. Completely empty is what an unexpanded template looks like, not a choice
@@ -255,8 +263,12 @@ async def join_channel(
             "Nothing arrives on its own. Call check_inbox before acting on anything and again before ending your turn."
         ),
         "keep_these": (
-            "send, peers and check_inbox need peer_secret. Keep the pair: joining again with both of them comes "
-            "back as this same participant, which is how you reclaim this name after a restart."
+            "connection_id and peer_secret are needed by send, peers and check_inbox. Carry them verbatim into "
+            "any summary or compaction of this conversation -- they are unguessable, nothing else will hand "
+            "them to you, and a session that loses them is still on the air and unable to say a word. If that "
+            "happens anyway: call join_channel again with this same channel and name, and it returns this same "
+            "membership with its secret. peer_uid is the one that matters after a restart, when this process is "
+            "gone and only the hat remembers the name was yours."
         ),
     }
     if not _all_tools_announced:
@@ -291,7 +303,12 @@ async def join_channel(
 
 PEER_SECRET = Annotated[
     str | None,
-    Field(description="The secret join_channel returned for this connection."),
+    Field(
+        description=(
+            "The secret join_channel returned for this connection. Carry it verbatim through any compaction or "
+            "summary; if it is lost, join_channel with the same channel and name returns this same membership."
+        )
+    ),
 ]
 
 CONNECTION_ID = Annotated[
@@ -475,6 +492,37 @@ def _shown(message: dict[str, Any]) -> str:
     return f"  · {sender} → {aloud}{mentioned}: {said}"
 
 
+RESUMED_EVENTS = frozenset({"SessionStart", "PostCompact"})
+"""Events that mean the model's memory was replaced rather than added to, so what it held is gone."""
+
+
+def _memberships_context() -> str:
+    """Every membership this process holds, written out so a model that just lost its context can act again.
+
+    A compaction summarises the conversation, and a `connection_id` and a `peer_secret` are exactly the kind of
+    opaque string a summary drops -- leaving a session still on the air, still holding its name, and unable to
+    say a word. The memberships never went anywhere: only the model's record of them did. So this is not a
+    recovery mechanism but a re-reading of state this process has held all along.
+
+    `SessionStart` is where it lands because Claude Code adds that event's plain text to the context it starts
+    the next turn with, and it fires with `source: compact` after a compaction.
+    """
+    if (backend := _radio) is None or not backend.memberships:
+        return ""
+    lines = [
+        f"  · {membership.name!r} on {membership.channel!r}: connection_id={membership.routing_id}, "
+        f"peer_uid={membership.peer_uid}, peer_secret={membership.peer_secret}"
+        for membership in backend.memberships.values()
+    ]
+    return (
+        "YAAC: you are still on the air, and these are the connections you hold. Keep them verbatim -- send, "
+        "peers and check_inbox need the secret, and nothing else will hand it to you:\n"
+        + "\n".join(lines)
+        + "\nIf you lose them again, call join_channel with the same channel and name and it returns this same "
+        "membership, secret included. Call check_inbox now: mail may have arrived while the context was replaced."
+    )
+
+
 def _hook_context() -> str:
     """Collect every connection's inbox and write it out for the model, or return "" if nothing arrived.
 
@@ -526,6 +574,14 @@ async def hook_report(
     they read a command hook's stdout, so `suppressOutput` is how to say nothing at all without it counting as a
     failure.
     """
+    # A context that was just replaced needs what it held, not what arrived: the mail can wait for the check_inbox
+    # this asks for, while a lost peer_secret is a session that cannot ask for anything.
+    if event in RESUMED_EVENTS:
+        if not (held := _memberships_context()):
+            return silence(client)
+        logger.info("hook: handed back %d membership(s) on %s", len(_radio.memberships), event)
+        return envelope(event, client, held)
+
     # Delivering immediately before check_inbox runs would take the messages out from under the call about to read
     # them, and the model would see the same text twice for its trouble.
     if "yaac" in tool_name:

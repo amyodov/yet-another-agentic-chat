@@ -239,6 +239,19 @@ so `join_channel` also returns a `watch` URL — point the `Monitor` tool at it
 once per join and each arrival becomes an event, even while nothing is running.
 That event is a doorbell, not the message: `check_inbox()` still reads it.
 
+The same hook covers the other way a session goes quiet. `join_channel()` returns
+a `connection_id` and a `peer_secret` that the other tools require, and a
+compaction is exactly the thing that drops an opaque string from a conversation —
+leaving a session still on the air, still holding its name, and unable to say a
+word. So the plugin also fires on a post-compaction `SessionStart` and hands the
+session back what it was holding. Nothing is stored to make that work: the
+memberships never went anywhere, only the model's record of them did.
+
+If you are not on Claude Code, or the hook does not fire, the recovery is the
+same one the tool descriptions name: call `join_channel()` again with the same
+channel and name, and the membership you already hold comes back, secret
+included.
+
 **Codex** needs one file, because its hooks cannot call an MCP tool — so a
 separate program answers them. In `~/.codex/hooks.json`, or `.codex/hooks.json`
 in a project:
@@ -411,6 +424,9 @@ the choices, and `dev_connections()` lists them on demand.
   sentence
 - A peer identity that survives a restart, so a session that comes back reclaims
   the name it had rather than being told it is taken
+- And a membership that survives a compaction: on Claude Code the session is
+  handed back what it held, and on any client rejoining the same channel under
+  the same name returns it
 - Channel creation reported, so a mistyped channel name is caught immediately
 - Bounces for messages that could not be delivered
 - Nickname collisions refused, except when the holder's session is gone, or when

@@ -23,6 +23,11 @@ one from the directory, hostname, or task. Adds send, check_inbox, peers and lea
 Joining is a commitment: nothing is ever pushed to you, so from then on you must call check_inbox yourself,
 every turn, or you are deaf on the channel.
 
+Returns a connection_id and a peer_secret that send, peers and check_inbox all require. Both MUST survive any
+compaction or summary of this conversation: copy them into it verbatim, because nothing will hand them back
+and a session that loses them is still on the air and unable to say a word. If they are lost anyway, call
+this again with the same channel and name -- the same membership comes back, secret included.
+
 *Not read-only.*
 
 | Parameter | Type | Required | Description |
@@ -30,7 +35,7 @@ every turn, or you are deaf on the channel.
 | `channel` | string | yes | Exact channel name, as the user gave it. |
 | `name` | string | yes | Exact name, as the user gave it. |
 | `peer_uid` | string | null | no | From an earlier join, to come back as the same participant. |
-| `peer_secret` | string | null | no | The secret that came with that peer_uid. |
+| `peer_secret` | string | null | no | The secret that came with that peer_uid, if this conversation still has it. |
 
 ## `list_channels` — always listed
 
@@ -59,7 +64,7 @@ doing what it asks of you.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `connection_id` | string | yes | The connection id join_channel gave you. Read only your own. |
-| `peer_secret` | string | null | no | The secret join_channel returned for this connection. |
+| `peer_secret` | string | null | no | The secret join_channel returned for this connection. Carry it verbatim through any compaction or summary; if it is lost, join_channel with the same channel and name returns this same membership. |
 
 ## `dev_connections` — listed only while on air
 
@@ -81,7 +86,7 @@ Leave one channel and remove that connection's inbox. Any other channel you are 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `connection_id` | string | null | no | Which connection to use. Omit unless this session holds more than one. |
-| `peer_secret` | string | null | no | The secret join_channel returned for this connection. |
+| `peer_secret` | string | null | no | The secret join_channel returned for this connection. Carry it verbatim through any compaction or summary; if it is lost, join_channel with the same channel and name returns this same membership. |
 
 ## `peers` — listed only while on air
 
@@ -92,7 +97,7 @@ List the names currently on your channel, besides your own.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `connection_id` | string | null | no | Which connection to use. Omit unless this session holds more than one. |
-| `peer_secret` | string | null | no | The secret join_channel returned for this connection. |
+| `peer_secret` | string | null | no | The secret join_channel returned for this connection. Carry it verbatim through any compaction or summary; if it is lost, join_channel with the same channel and name returns this same membership. |
 
 ## `send` — listed only while on air
 
@@ -117,4 +122,4 @@ arrives only through check_inbox: give the peer a moment, then check.
 | `tags` | array | null | no | Topic labels. Not priorities; nothing acts on them. |
 | `payload` | object | no | Any JSON to carry beside the text, when structure helps more than prose. |
 | `connection_id` | string | null | no | Which connection to use. Omit unless this session holds more than one. |
-| `peer_secret` | string | null | no | The secret join_channel returned for this connection. |
+| `peer_secret` | string | null | no | The secret join_channel returned for this connection. Carry it verbatim through any compaction or summary; if it is lost, join_channel with the same channel and name returns this same membership. |

@@ -89,14 +89,20 @@ def files() -> dict[str, dict[str, Any]]:
         # so there is no second process, no socket and nothing on the wire. The name is the plugin-scoped one that
         # Claude Code requires for a plugin-bundled server.
         #
-        # Three events, because between them they cover every moment a session is doing anything: before a tool
-        # call, when the user speaks, and as a turn ends -- the last being the one that reopens a finished turn so
-        # the model can act on what arrived.
+        # Four events. Three cover every moment a session is doing anything -- before a tool call, when the user
+        # speaks, and as a turn ends, the last being the one that reopens a finished turn so the model can act on
+        # what arrived. The fourth answers the opposite problem: `SessionStart` fires with `source: compact` after
+        # a compaction, and Claude Code adds that event's plain text to the context it starts the next turn with,
+        # so it is where a session is handed back the connection ids and secrets the compaction took from it.
         "plugin/hooks/hooks.json": {
-            "description": "Hands this session the messages other sessions have sent it. Silent when there are none.",
+            "description": (
+                "Hands this session the messages other sessions have sent it, and hands back the connections it "
+                "holds when a compaction replaces what it knew. Silent when there is nothing to say."
+            ),
             "hooks": {
                 event: [
                     {
+                        **({"matcher": matcher} if matcher else {}),
                         "hooks": [
                             {
                                 "type": "mcp_tool",
@@ -104,15 +110,17 @@ def files() -> dict[str, dict[str, Any]]:
                                 "tool": "hook_report",
                                 "input": {"event": event, **extra},
                             }
-                        ]
+                        ],
                     }
                 ]
                 # `${tool_name}` is substituted from the hook payload, and lets the delivery stand aside when the
-                # tool about to run is check_inbox itself.
-                for event, extra in (
-                    ("PreToolUse", {"tool_name": "${tool_name}"}),
-                    ("UserPromptSubmit", {}),
-                    ("Stop", {}),
+                # tool about to run is check_inbox itself. The `compact` matcher keeps the hand-back to the one
+                # SessionStart source that means the model lost what it held: a startup or a resume did not.
+                for event, matcher, extra in (
+                    ("PreToolUse", None, {"tool_name": "${tool_name}"}),
+                    ("UserPromptSubmit", None, {}),
+                    ("Stop", None, {}),
+                    ("SessionStart", "compact", {}),
                 )
             },
         },

@@ -119,6 +119,15 @@ def test_the_hooks_call_a_tool_this_server_really_has(generated) -> None:
         "PreToolUse": [{"event": "PreToolUse", "tool_name": "${tool_name}"}],
         "UserPromptSubmit": [{"event": "UserPromptSubmit"}],
         "Stop": [{"event": "Stop"}],
+        "SessionStart": [{"event": "SessionStart"}],
+    }
+    # SessionStart is the only one that is matched, because it is the only one whose other sources mean nothing
+    # was lost: a startup or a resume has no context to hand back.
+    assert {event: [group.get("matcher") for group in groups] for event, groups in hooks.items()} == {
+        "PreToolUse": [None],
+        "UserPromptSubmit": [None],
+        "Stop": [None],
+        "SessionStart": ["compact"],
     }
 
 

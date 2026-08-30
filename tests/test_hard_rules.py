@@ -243,6 +243,28 @@ async def test_each_tool_tells_the_client_what_calling_it_costs(
     assert listed["annotations"] == expected
 
 
+async def test_the_wire_says_the_secret_has_to_outlive_a_compaction(endpoint: str) -> None:
+    """The one fact a model cannot recover by reasoning, in the only place that always reaches it.
+
+    A tool description rides in every request, so it survives a compaction where a tool result does not -- and a
+    result is where this used to be said. What compaction takes is the value, and a model with no warning has no
+    reason to treat an opaque string as worth carrying. Asserted off `tools/list` rather than off the constants,
+    because the description a client actually receives is the one that matters.
+    """
+    stdout, _ = await run_server(endpoint, handshake("codex-mcp-client"))
+    [tools] = [m["result"]["tools"] for m in decode(stdout) if m.get("id") == 2]
+    described = {t["name"]: t for t in tools}
+
+    # Where the secret is handed out, said in the description itself.
+    joining = described["join_channel"]["description"]
+    assert "MUST survive any\ncompaction" in joining and "call\nthis again with the same channel and name" in joining
+
+    # And on every tool that asks for it back, since that is the argument a compacted model has to produce.
+    for name in ("send", "peers", "check_inbox", "leave_channel"):
+        asked = described[name]["inputSchema"]["properties"]["peer_secret"]["description"]
+        assert "verbatim through any compaction" in asked
+
+
 @pytest.mark.parametrize(
     "client_name,after_leaving,notifications",
     [
