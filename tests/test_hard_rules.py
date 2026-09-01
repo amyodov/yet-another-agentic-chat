@@ -13,13 +13,21 @@ import logging
 import os
 import socket
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from yaac import frontend
-from yaac.backend import ConnectionRefused, add_rendezvous_flags, chosen_rendezvous, configure_logging
+from yaac.backend import (
+    LOG_QUEUE,
+    ConnectionRefused,
+    add_rendezvous_flags,
+    chosen_rendezvous,
+    configure_logging,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
@@ -538,6 +546,60 @@ async def test_a_mention_of_somebody_absent_is_carried_and_reported(monkeypatch)
     assert answer["mentioned_but_absent"] == ["Carol"]
 
 
+class Blocked(io.RawIOBase):
+    """A pipe nobody is reading: every write waits, exactly as a full 64 KB kernel buffer makes it wait."""
+
+    def __init__(self) -> None:
+        self.wedged = threading.Event()  # never set; a write that reaches here does not come back
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        self.wedged.wait()
+        return len(data)
+
+
+def test_logging_cannot_block_the_session(monkeypatch) -> None:
+    """Hard rule 3 -- nothing may block the session -- applied to diagnostics, which is where it was missing.
+
+    A client that pipes stderr and stops reading it leaves a 64 KB buffer and no more; Claude Code captures a
+    server's stderr only while it connects. The write that fills it blocks inside the event loop, and from
+    outside the session simply stops answering: the transport dies and every tool reports it, including the
+    diagnostics somebody would reach for. Measured against a real server before the fix: 3000 warnings, and it
+    never answered again.
+
+    A mixed-version net produces that flood on its own, since a hat logs a warning for every operator message it
+    does not know and a Codex hook asks on every tool call. So the queue drops lines rather than waiting: a
+    radio that stops relaying because nobody read its log has failed at the only job it has.
+    """
+    blocked = Blocked()
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(blocked))
+    logger = logging.getLogger("yaac")
+    handlers = list(logger.handlers)
+    try:
+        logger.handlers.clear()
+        configure_logging()
+
+        # In a thread, so that a regression is a failed assertion rather than a suite that hangs -- which is how
+        # this class of bug cost fifty minutes of a Windows CI job once already.
+        done = threading.Event()
+
+        def shout() -> None:
+            for number in range(LOG_QUEUE * 3):
+                logger.warning("ignoring operator message %r", number)
+            done.set()
+
+        threading.Thread(target=shout, daemon=True).start()
+        assert done.wait(timeout=20)
+    finally:
+        # Let the writer thread out before leaving. `logging.shutdown` flushes every handler at interpreter
+        # exit, so a stream still wedged here would stop pytest itself from ending -- which is the same fact
+        # this test is about, met from the other side.
+        blocked.wedged.set()
+        logger.handlers[:] = handlers
+
+
 @pytest.mark.parametrize(
     "given,endpoint,role",
     [
@@ -601,9 +663,12 @@ def test_a_log_line_carries_a_name_a_console_cannot_spell(monkeypatch, name: str
         logger.handlers.clear()
         configure_logging()
         logger.info("on air as %r", name)
-        for handler in logger.handlers:
-            handler.flush()
+        # A line is written by the queue's own thread, so waiting for it is part of what logging now is.
+        wanted = f"[yaac] on air as {name!r}"
+        deadline = time.monotonic() + 10
+        while wanted not in console.buffer.getvalue().decode("utf-8") and time.monotonic() < deadline:
+            time.sleep(0.02)
     finally:
         logger.handlers[:] = handlers
 
-    assert f"[yaac] on air as {name!r}" in console.buffer.getvalue().decode("utf-8")
+    assert wanted in console.buffer.getvalue().decode("utf-8")

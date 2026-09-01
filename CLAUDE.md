@@ -179,6 +179,21 @@ before it proves the peer read the new query and had nothing to say. Measured ag
 turned a 1.0 s timeout into 0.13 s. `directory.py` now does this, and `test_directory.py` holds a hat that
 answers `channels` and not `sessions` so the next wire addition inherits the test rather than the bug.
 
+**A stderr nobody reads wedges the process, and diagnostics are where that gets forgotten.** A client that pipes
+a server's stderr and stops reading it leaves a 64 KB kernel buffer and no more -- and Claude Code is exactly
+such a client, since it captures a server's stderr only while it connects. The write that fills the buffer blocks,
+and if it blocks inside the event loop the session stops answering entirely: measured on 2026-09-01, 3000
+warnings wedged a real server for good, and every tool call afterwards reported `Transport closed`, including the
+one somebody would call to diagnose it. `logging.shutdown` flushes handlers at interpreter exit, so a wedged
+stream also stops the process from ever exiting -- the same fact met on the way out.
+
+The flood is not hypothetical: a hat logs when an operator message is one it does not know, and a Codex hook asks
+on every tool call, so a mixed-version net produces it unaided. Two answers, both needed. `configure_logging`
+puts a bounded queue and a writer thread between the logger and the stream, so a line is dropped rather than
+waited on -- a radio that stops relaying because nobody read its log has failed at the only job it has. And the
+hat says an unknown op once rather than once per message, since a newer peer questioning an older hat is
+ordinary rather than alarming.
+
 **A connect to a closed local port does not fail fast on Windows.** Measured in the field by Vadim: walking
 eight candidate ports cost 8.2 s on every hook event, where the same walk on macOS and Linux is immediate --
 `ECONNREFUSED` comes back on the loopback at once there. This is why nothing in YAAC probes a range of addresses:

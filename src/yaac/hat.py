@@ -73,6 +73,7 @@ class Hat:
         # Where each session can be reached from outside its own process, also as told by `hello`. A directory,
         # not a ledger: it holds addresses, never mail and never counts.
         self.sessions: dict[bytes, dict[str, Any]] = {}
+        self._unknown_ops: set[str] = set()
         self.whois_inflight: set[bytes] = set()
 
     # -- transmission ----------------------------------------------------
@@ -226,7 +227,12 @@ class Hat:
             case "sessions":
                 self._send(source, protocol.sessions_answer(self.session_report(), to=self._scope_of(source)))
             case unknown:
-                logger.warning("ignoring operator message %r from %r", unknown, source)
+                # Info, not warning, and said once per op rather than once per message. A newer peer asking an
+                # older hat a question it does not know is ordinary in a mixed-version net -- a hook does it on
+                # every tool call -- so a line per message is a flood somebody else's process has to absorb.
+                if unknown not in self._unknown_ops:
+                    self._unknown_ops.add(unknown)
+                    logger.info("ignoring operator message %r from %r; this build does not know it", unknown, source)
 
     def _hello(self, source: bytes, payload: dict[str, Any]) -> None:
         """Bind a (channel, name) pair to a routing_id.

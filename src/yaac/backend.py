@@ -27,7 +27,9 @@ import asyncio
 import contextlib
 import io
 import logging
+import logging.handlers
 import os
+import queue
 import random
 import sys
 from collections.abc import Callable
@@ -49,6 +51,24 @@ logger = logging.getLogger(__name__)
 DEFAULT_ENDPOINT = "tcp://127.0.0.1:19116"
 """19116 is 0x4AAC. Chosen below the ephemeral port range so the kernel will not assign it as the source port of an
 unrelated outbound connection, which would make the bind fail for reasons unrelated to YAAC."""
+
+LOG_QUEUE = 2048
+"""Log lines held for the writer thread. Deep enough that nothing is lost while stderr is merely slow, and
+bounded so that stderr never being read again costs memory that stops growing."""
+
+
+_listener: logging.handlers.QueueListener | None = None
+"""The thread that writes what the queue collects. Held so a second `configure_logging` can retire the first."""
+
+
+class _DroppingQueueHandler(logging.handlers.QueueHandler):
+    """A queue handler that drops rather than waits. `QueueHandler.enqueue` calls `put`, which blocks on a full
+    bounded queue -- reintroducing, one step further back, exactly the stall the queue is here to prevent."""
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        with contextlib.suppress(queue.Full):
+            self.queue.put_nowait(record)
+
 
 LOOPBACK = ("127.0.0.1", "::1", "localhost", "[::1]")
 """Addresses that cannot be reached from another machine, which is the whole of what makes a bind safe here."""
@@ -83,7 +103,22 @@ def configure_logging() -> None:
         stream = io.TextIOWrapper(raw, encoding="utf-8", errors="backslashreplace", line_buffering=True)
     handler = logging.StreamHandler(stream)
     handler.setFormatter(logging.Formatter("[yaac] %(message)s"))
-    logger.addHandler(handler)
+
+    # Writes go through a bounded queue and a thread, so a log line can never block the event loop. A client
+    # that pipes stderr and stops reading it -- Claude Code captures a server's stderr only while it connects --
+    # leaves a 64 KB pipe buffer and no more; the write that fills it blocks forever, and from outside the
+    # session simply stops answering and the transport dies. Measured: 3000 warnings wedged a real server for
+    # good. Lines are dropped when the queue is full, which is the right way round -- a radio that stops
+    # relaying because nobody read its diagnostics has failed at the only job it has.
+    global _listener
+    if _listener is not None:
+        # Called twice in one process, which the suite does: without this each call leaves another listener
+        # thread and another handler behind, and every line is written once per call.
+        _listener.stop()
+    posting = _DroppingQueueHandler(queue.Queue(maxsize=LOG_QUEUE))
+    _listener = logging.handlers.QueueListener(posting.queue, handler, respect_handler_level=True)
+    _listener.start()
+    logger.addHandler(posting)
     # Nothing above this package should have to care, and a root handler installed by a host would otherwise get a
     # second copy of every line.
     logger.propagate = False
