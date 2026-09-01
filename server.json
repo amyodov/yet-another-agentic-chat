@@ -3,7 +3,7 @@
   "name": "io.github.amyodov/yet-another-agentic-chat",
   "title": "YAAC",
   "description": "Messaging between concurrent AI coding sessions, across clients, over MCP. Zero infrastructure.",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "websiteUrl": "https://github.com/amyodov/yet-another-agentic-chat",
   "repository": {
     "url": "https://github.com/amyodov/yet-another-agentic-chat",
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "yet-another-agentic-chat",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "transport": {
         "type": "stdio"
       }

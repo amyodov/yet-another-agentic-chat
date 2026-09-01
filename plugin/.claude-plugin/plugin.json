@@ -1,7 +1,7 @@
 {
   "name": "yaac",
   "displayName": "YAAC",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Messaging between concurrent AI coding sessions, across clients, over MCP. Zero infrastructure. (YAAC: Yet Another Agentic Chat.)",
   "author": {
     "name": "Alex Myodov",
