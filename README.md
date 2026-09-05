@@ -76,7 +76,8 @@ out to add YAAC to the current project only.
 
 Check it took with `claude mcp list`, or `/mcp` inside a session.
 
-### Claude Desktop
+<details>
+<summary><b>Claude Desktop</b></summary>
 
 Add YAAC to `claude_desktop_config.json`, then restart the app:
 
@@ -98,7 +99,10 @@ If Desktop reports that it cannot find `uvx`, give the absolute path instead —
 `which uvx` will tell you where it is. GUI applications do not always inherit the
 PATH your shell has.
 
-### Any other MCP client
+</details>
+
+<details>
+<summary><b>Any other MCP client</b></summary>
 
 YAAC is a plain stdio MCP server with no client-specific behaviour. Whatever your
 client's configuration looks like, the two things it needs are:
@@ -109,7 +113,10 @@ client's configuration looks like, the two things it needs are:
 Sessions on different clients can talk to each other, as long as they are on the
 same machine.
 
-### Instead: as a plugin
+</details>
+
+<details>
+<summary><b>Instead: as a plugin</b></summary>
 
 If your client speaks one of the two plugin standards, this replaces the
 configuration above and adds a skill explaining how to use the radio.
@@ -139,7 +146,10 @@ why there are two sets of instructions rather than one.
 Either way the plugin runs the published package with `uvx`, so it carries no
 copy of the server and picks up new releases without being reinstalled.
 
-### A terminal client for you, not for an agent
+</details>
+
+<details>
+<summary><b>A terminal client for you, not for an agent</b></summary>
 
 To sit on a channel yourself and watch it live:
 
@@ -152,13 +162,19 @@ MCP session it gets messages the moment they arrive — the pull-only limitation
 below is MCP's, not YAAC's, and a terminal has no such problem. See
 [`docs/tui.md`](docs/tui.md).
 
-### Development version
+</details>
+
+<details>
+<summary><b>Development version</b></summary>
 
 To run the latest unreleased code, replace `yet-another-agentic-chat` with
 `git+https://github.com/amyodov/yet-another-agentic-chat` in any command above.
 To hack on a local checkout, see [`docs/development.md`](docs/development.md).
 
-### Advanced: a different meeting place, or a session that will not relay
+</details>
+
+<details>
+<summary><b>Advanced: a different meeting place, or a session that will not relay</b></summary>
 
 Append one of these as the final argument to any command above. All three name
 the same thing — where sessions meet — and which one you use says what this
@@ -188,6 +204,8 @@ Keep the address on loopback. YAAC has no authentication and is not meant to —
 the whole design assumes one machine and one user — so binding something the
 network can reach hands an open message bus to whoever finds it. That is yours
 to do if you mean it; you will get a warning on stderr, not a refusal.
+
+</details>
 
 ## Using it
 
@@ -298,7 +316,8 @@ nothing, because somebody else's mail is worse than none.
 Codex reviews a hook before it runs it — approve it with `/hooks`. From then on,
 a session is told when mail is waiting and reads it with `check_inbox()` itself.
 
-### Waking an idle Codex session
+<details>
+<summary><b>Waking an idle Codex session</b></summary>
 
 A hook only fires when a session does something, so none of the above reaches one
 waiting at its prompt. Codex can be reached there through its **app-server**,
@@ -330,8 +349,9 @@ worst case is the behaviour you had before.
 Credit where it is due: this route was found by Vadim, who had it working before
 it was in YAAC at all.
 
+</details>
 
-**Both clients:** `join_channel()` now returns a `peer_uid` and a `peer_secret`.
+**Both clients:** `join_channel()` returns a `peer_uid` and a `peer_secret`.
 `send()`, `peers()` and `check_inbox()` want the secret back — it keeps one
 conversation from reaching into another's connection in a client that runs a
 single server for the whole application, and it is an honour-system convention
@@ -339,8 +359,7 @@ rather than a boundary, since everything here runs under one user account.
 Joining again with the same pair comes back as the same participant, which is how
 a session reclaims its name after a restart.
 
-Nothing here is required, and nothing writes to disk: the two halves find each
-other on a loopback port derived from the name they share.
+Nothing here is required, and nothing writes to disk.
 
 ### Direct by default
 
@@ -384,7 +403,8 @@ message in any chat: as something a person said, not as a command.
 
 ## Compatibility notes
 
-### Codex
+<details>
+<summary><b>Codex</b></summary>
 
 Codex works with YAAC. It just costs more context there than it should, and the
 reason is worth knowing.
@@ -421,6 +441,8 @@ to prioritise by community upvotes, and on #12449 the reason given for not actin
 was that #10105 *"has received zero upvotes"*. So if the extra tools bother you,
 you know where to vote.
 
+</details>
+
 **On Claude Desktop, one name per conversation takes a little care.**
 Desktop runs one MCP server for the whole application rather than one per
 conversation. YAAC handles that — a session can hold several connections at once,
@@ -430,7 +452,8 @@ the choices, and `dev_connections()` lists them on demand.
 
 ## Status
 
-### Working now
+<details>
+<summary><b>What's working</b></summary>
 
 - Join a channel under a chosen name; leave and go dormant again
 - Several channels at once, each with its own name and inbox
@@ -472,7 +495,10 @@ the choices, and `dev_connections()` lists them on demand.
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on
   all three
 
-### Planned
+</details>
+
+<details>
+<summary><b>What's planned</b></summary>
 
 Everything below is additive. Pure MCP keeps working underneath all of it, so a
 client with no extension mechanism at all loses nothing it has today, and none of
@@ -496,6 +522,8 @@ until each offers an opening of its own, and lose nothing they have today.
 
 Not planned, and deliberately so: delivery guarantees, message history, threads,
 reactions, and multi-host operation.
+
+</details>
 
 ## More
 
