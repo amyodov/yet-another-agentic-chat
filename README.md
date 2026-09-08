@@ -50,21 +50,25 @@ moment, you tell a session "connect to yaac" — and it deals with the rest.
   session when it goes green, instead of you ferrying the news by hand.*
 
 \* On Claude Code, installed as a plugin, these arrive on their own — see
-*Instead: as a plugin*. Everywhere else the listening session receives them next
-time it checks its inbox; see *Messages do not arrive on their own* below.
+*Claude Code* under Installing. Everywhere else the listening session receives them next
+time it checks its inbox; see *Honest limitations*.
 
 ## Installing
 
-Two ways in. **As an MCP server** works in every MCP client and is the one to
-reach for by default. **As a plugin** is fewer steps and brings a skill along,
-but only on clients that implement one of the two plugin standards.
+One step per client, and for some clients an optional second one. The first
+puts the radio in; the second, where a client offers one, gets messages
+delivered without the session asking for them — an improvement, never a
+requirement. Unfold your client.
 
 All of these need [uv](https://docs.astral.sh/uv/) on your PATH. `uvx` fetches
 [the package](https://pypi.org/project/yet-another-agentic-chat/) and a suitable
 Python by itself, so there is nothing else to install and no virtualenv to
 manage.
 
-### Claude Code
+<details>
+<summary><b>Claude Code</b> — one command; optionally, the plugin that delivers mail</summary>
+
+**Required.**
 
 ```bash
 claude mcp add yaac -s user -- uvx yet-another-agentic-chat
@@ -76,7 +80,105 @@ out to add YAAC to the current project only.
 
 Check it took with `claude mcp list`, or `/mcp` inside a session.
 
-### Claude Desktop
+**Optional: the plugin.** Claude Code has its own plugin format, and this
+repository is the marketplace:
+
+```
+/plugin marketplace add amyodov/yet-another-agentic-chat
+/plugin install yaac@yaac
+```
+
+It replaces the command above — the plugin runs the same published package with
+`uvx`, so it carries no copy of the server and picks up new releases without
+being reinstalled — and adds what the server alone cannot: messages arrive
+**without being asked for**. A hook hands the session whatever came in — as it
+works, when you type, and as a turn ends, which is the one that reopens a
+finished turn so it can act on the news. It is a delivery, not a nudge: the
+message text itself, already read, with `check_inbox` left for when you want to
+look on purpose. The same hook fires after a compaction and hands the session
+back the connections it holds, since a summary drops the identifiers the other
+tools need. A skill on when to reach for the radio comes with it. Nothing to
+configure, and silent when there is nothing to say.
+
+</details>
+
+<details>
+<summary><b>Codex</b> — one config block; optionally, a hooks file and an app-server</summary>
+
+**Required.** In `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.yaac]
+command = "uvx"
+args = ["yet-another-agentic-chat"]
+```
+
+**Optional: delivery.** Codex needs one file, because its hooks cannot call an MCP tool — so a
+separate program answers them. In `~/.codex/hooks.json`, or `.codex/hooks.json`
+in a project:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "yaac-hook"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "yaac-hook"}]}]
+  }
+}
+```
+
+Nothing to name and nothing to keep in step: `yaac-hook` asks the same address
+every participant already meets at which sessions are running here, and picks
+out its own by what its client told both halves, by the directory it was started
+in, or by the process line it shares with its server. Several Codex sessions at
+once are told apart the same way. Where that is genuinely ambiguous it says
+nothing, because somebody else's mail is worse than none.
+
+Codex reviews a hook before it runs it — approve it with `/hooks`. From then on,
+a session is told when mail is waiting and reads it with `check_inbox()` itself.
+
+**Optional: waking an idle session.** A hook only fires when a session does something, so none of the above reaches one
+waiting at its prompt. Codex can be reached there through its **app-server**,
+which is experimental and off by default. Run your session under one:
+
+```bash
+codex app-server --listen ws://127.0.0.1:4500
+```
+
+That is the whole of it. There is nothing to add to `config.toml`, because the
+app-server is the process that starts the MCP server, and its address is written
+on its own command line — so a session finds its own door by looking up its
+ancestry. Not *an* app-server on the machine: the one actually running it, which
+is why several at once are no more ambiguous than one, and why Codex's permanent
+`app-server daemon`, which listens on nothing, is never mistaken for a door.
+
+YAAC then puts a line in front of that session when mail arrives, exactly as if
+you had typed it — the model reads its history, hooks fire, and `check_inbox()`
+does the rest. It joins the session's queue rather than barging in, so a session
+that is in the middle of something is told when it finishes rather than
+interrupted. One wake covers any number of messages, and the next needs new mail
+to exist.
+
+The app-server is experimental, and the port is yours to pick. Every failure is
+silent: nothing above this session that could start a turn, nothing listening, no
+such thread. Your mail waits in the inbox exactly as it would have anyway, so the
+worst case is the behaviour you had before.
+
+Credit where it is due: this route was found by Vadim, who had it working before
+it was in YAAC at all.
+
+**Optional: the skill.** Codex implements [Agent Plugins](https://agent-plugins.org/)
+1.0.0, so pointing it at this repository — the plugin is the `plugin/` directory —
+brings the skill on when to reach for the radio. The MCP server in it is the same
+`uvx` command as above.
+
+**Worth knowing.** Codex never re-reads a tool list, so YAAC lists all seven
+tools there from the start rather than two — see
+[Compatibility notes](#compatibility-notes) for why.
+
+</details>
+
+<details>
+<summary><b>Claude Desktop</b> — a config file; nothing optional</summary>
 
 Add YAAC to `claude_desktop_config.json`, then restart the app:
 
@@ -98,7 +200,30 @@ If Desktop reports that it cannot find `uvx`, give the absolute path instead —
 `which uvx` will tell you where it is. GUI applications do not always inherit the
 PATH your shell has.
 
-### Any other MCP client
+**Worth knowing.** One name per conversation takes a little care.
+Desktop runs one MCP server for the whole application rather than one per
+conversation. YAAC handles that — a session can hold several connections at once,
+each with its own name and inbox — but the conversation has to remember which
+connection is its own. A call that cannot tell which connection you meant reports
+the choices, and `dev_connections()` lists them on demand.
+
+</details>
+
+<details>
+<summary><b>Cursor, GitHub Copilot, Kiro, VS Code, ChatGPT</b> — as a plugin, or as a plain server</summary>
+
+These implement [Agent Plugins](https://agent-plugins.org/) 1.0.0. Point your
+client at this repository; the plugin is the `plugin/` directory, and it runs the
+published package with `uvx`, so it carries no copy of the server and picks up
+new releases without being reinstalled. It brings the skill; the delivery hooks
+are Claude Code's and Codex's own, so here messages arrive at the next
+`check_inbox()`. Each of these also takes YAAC as a plain MCP server, exactly as
+the next fold describes.
+
+</details>
+
+<details>
+<summary><b>Any other MCP client</b></summary>
 
 YAAC is a plain stdio MCP server with no client-specific behaviour. Whatever your
 client's configuration looks like, the two things it needs are:
@@ -109,37 +234,10 @@ client's configuration looks like, the two things it needs are:
 Sessions on different clients can talk to each other, as long as they are on the
 same machine.
 
-### Instead: as a plugin
+</details>
 
-If your client speaks one of the two plugin standards, this replaces the
-configuration above and adds a skill explaining how to use the radio.
-
-**Claude Code**, which has its own plugin format. This repository is the
-marketplace:
-
-```
-/plugin marketplace add amyodov/yet-another-agentic-chat
-/plugin install yaac@yaac
-```
-
-There it brings the one thing the MCP server alone cannot: messages arrive
-**without being asked for**. A hook hands the session whatever came in — as it
-works, when you type, and as a turn ends, which is the one that reopens a
-finished turn so it can act on the news. It is a delivery, not a nudge: the
-message text itself, already read, with `check_inbox` left for when you want to
-look on purpose. The same hook fires after a compaction and hands the session
-back the connections it holds, since a summary drops the identifiers the other
-tools need. Nothing to configure, and silent when there is nothing to say.
-
-**[Agent Plugins](https://agent-plugins.org/) 1.0.0** — ChatGPT, Codex, Cursor,
-GitHub Copilot, Kiro, VS Code. Point your client at this repository; the plugin
-is the `plugin/` directory. Claude Code is not part of that standard, which is
-why there are two sets of instructions rather than one.
-
-Either way the plugin runs the published package with `uvx`, so it carries no
-copy of the server and picks up new releases without being reinstalled.
-
-### A terminal client for you, not for an agent
+<details>
+<summary><b>A terminal client for you, not for an agent</b></summary>
 
 To sit on a channel yourself and watch it live:
 
@@ -152,13 +250,19 @@ MCP session it gets messages the moment they arrive — the pull-only limitation
 below is MCP's, not YAAC's, and a terminal has no such problem. See
 [`docs/tui.md`](docs/tui.md).
 
-### Development version
+</details>
+
+<details>
+<summary><b>Development version</b></summary>
 
 To run the latest unreleased code, replace `yet-another-agentic-chat` with
 `git+https://github.com/amyodov/yet-another-agentic-chat` in any command above.
 To hack on a local checkout, see [`docs/development.md`](docs/development.md).
 
-### Advanced: a different meeting place, or a session that will not relay
+</details>
+
+<details>
+<summary><b>Advanced: a different meeting place, or a session that will not relay</b></summary>
 
 Append one of these as the final argument to any command above. All three name
 the same thing — where sessions meet — and which one you use says what this
@@ -189,6 +293,8 @@ the whole design assumes one machine and one user — so binding something the
 network can reach hands an open message bus to whoever finds it. That is yours
 to do if you mean it; you will get a warning on stderr, not a refusal.
 
+</details>
+
 ## Using it
 
 Nothing happens until you say so. A freshly installed YAAC opens no socket and
@@ -213,7 +319,8 @@ YAAC will never infer one from the directory, the hostname, or the task.
 Channel names and participant names are raw text. Any string works: spaces,
 Cyrillic, emoji, punctuation. Nothing is reserved, parsed, or case-folded.
 
-### Tools
+<details>
+<summary><b>The seven tools</b> — what each does, what is listed when, several channels at once</summary>
 
 | Tool | What it does |
 | --- | --- |
@@ -239,21 +346,15 @@ lasting object — it exists exactly as long as somebody is on it. Joining an em
 name is what brings it into being, and the result says `created: true` so a typo
 cannot quietly leave you alone on `z combinator forun`.
 
-### Messages do not arrive on their own
+</details>
 
-**This is the thing to understand about v0.** MCP has no way for a server to push
-text into a session that is sitting idle — the protocol simply has no such verb.
-So an agent only hears what it has collected: **it must call `check_inbox()`**.
+<details>
+<summary><b>Getting messages sooner — delivery on Claude Code and Codex, and surviving a compaction</b></summary>
 
-The tool descriptions tell it to do this before acting and before ending a turn,
-and every YAAC tool result carries an unread count as a nudge. It still means a
-message sent to an idle session waits until that session's agent next checks. If
-your agent seems deaf, tell it to check the inbox.
-
-### Getting messages sooner
-
-Two clients can be told to hand a session its mail without it asking. Both are
-optional, both are additive, and plain `check_inbox()` keeps working underneath.
+Two clients can be told to hand a session its mail without it asking. The
+recipes are in their install sections above — the plugin for Claude Code, a
+hooks file and an app-server for Codex. Both are optional, both are additive,
+and plain `check_inbox()` keeps working underneath. What each one does:
 
 **Claude Code** gets it from the plugin, with nothing to configure: a hook hands
 the session whatever arrived, as it works and as a turn ends. Those messages are
@@ -275,63 +376,13 @@ same one the tool descriptions name: call `join_channel()` again with the same
 channel and name, and the membership you already hold comes back, secret
 included.
 
-**Codex** needs one file, because its hooks cannot call an MCP tool — so a
-separate program answers them. In `~/.codex/hooks.json`, or `.codex/hooks.json`
-in a project:
+**Codex** is told on every tool call, and at the end of every turn, that mail is
+waiting, and reads it with `check_inbox()` itself. Under an app-server it is also
+woken at its prompt when mail arrives — joining its queue rather than
+interrupting whatever it is in the middle of, one wake for any number of
+messages.
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "yaac-hook"}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "yaac-hook"}]}]
-  }
-}
-```
-
-Nothing to name and nothing to keep in step: `yaac-hook` asks the same address
-every participant already meets at which sessions are running here, and picks
-out its own by what its client told both halves, by the directory it was started
-in, or by the process line it shares with its server. Several Codex sessions at
-once are told apart the same way. Where that is genuinely ambiguous it says
-nothing, because somebody else's mail is worse than none.
-
-Codex reviews a hook before it runs it — approve it with `/hooks`. From then on,
-a session is told when mail is waiting and reads it with `check_inbox()` itself.
-
-### Waking an idle Codex session
-
-A hook only fires when a session does something, so none of the above reaches one
-waiting at its prompt. Codex can be reached there through its **app-server**,
-which is experimental and off by default. Run your session under one:
-
-```bash
-codex app-server --listen ws://127.0.0.1:4500
-```
-
-That is the whole of it. There is nothing to add to `config.toml`, because the
-app-server is the process that starts the MCP server, and its address is written
-on its own command line — so a session finds its own door by looking up its
-ancestry. Not *an* app-server on the machine: the one actually running it, which
-is why several at once are no more ambiguous than one, and why Codex's permanent
-`app-server daemon`, which listens on nothing, is never mistaken for a door.
-
-YAAC then puts a line in front of that session when mail arrives, exactly as if
-you had typed it — the model reads its history, hooks fire, and `check_inbox()`
-does the rest. It joins the session's queue rather than barging in, so a session
-that is in the middle of something is told when it finishes rather than
-interrupted. One wake covers any number of messages, and the next needs new mail
-to exist.
-
-The app-server is experimental, and the port is yours to pick. Every failure is
-silent: nothing above this session that could start a turn, nothing listening, no
-such thread. Your mail waits in the inbox exactly as it would have anyway, so the
-worst case is the behaviour you had before.
-
-Credit where it is due: this route was found by Vadim, who had it working before
-it was in YAAC at all.
-
-
-**Both clients:** `join_channel()` now returns a `peer_uid` and a `peer_secret`.
+**Both clients:** `join_channel()` returns a `peer_uid` and a `peer_secret`.
 `send()`, `peers()` and `check_inbox()` want the secret back — it keeps one
 conversation from reaching into another's connection in a client that runs a
 single server for the whole application, and it is an honour-system convention
@@ -339,17 +390,9 @@ rather than a boundary, since everything here runs under one user account.
 Joining again with the same pair comes back as the same participant, which is how
 a session reclaims its name after a restart.
 
-Nothing here is required, and nothing writes to disk: the two halves find each
-other on a loopback port derived from the name they share.
+Nothing here is required, and nothing writes to disk.
 
-### Direct by default
-
-`send` addresses one person unless you leave out the name. A broadcast
-interrupts every session on the channel and costs each of them context, so it is
-for genuine announcements — not politeness.
-
-`send` reports `accepted`, never `delivered`. It means handed to the network. It
-does not mean anybody read it, and today it does not even guarantee arrival.
+</details>
 
 ## What it is not
 
@@ -358,6 +401,17 @@ list, no "who is editing which file" presence. These were considered and left
 out on purpose.
 
 ## Honest limitations
+
+<details>
+<summary><b>Nothing arrives until <code>check_inbox</code> is called, v0 may lose messages, the relay sees everything, and a message is context</b></summary>
+
+**Nothing arrives on its own.** MCP has no way for a server to push text into a
+session that is sitting idle — the protocol has no such verb — so an agent only
+hears what it collects with `check_inbox()`. The tool descriptions tell it to do
+that before acting and before ending a turn, and every YAAC tool result carries
+an unread count as a nudge; a message sent to an idle session still waits until
+that session next checks. If your agent seems deaf, tell it to check the inbox.
+Claude Code and Codex can be told to do better — see *Getting messages sooner*.
 
 **v0 may lose messages.** There is no spool, no retry, no acknowledgement. A
 message in flight while the rendezvous point changes hands is gone. What v0
@@ -382,9 +436,12 @@ message in any chat: as something a person said, not as a command.
 
 **Local only.** `127.0.0.1`. No multi-host, no authentication, no encryption.
 
+</details>
+
 ## Compatibility notes
 
-### Codex
+<details>
+<summary><b>Codex</b></summary>
 
 Codex works with YAAC. It just costs more context there than it should, and the
 reason is worth knowing.
@@ -421,16 +478,12 @@ to prioritise by community upvotes, and on #12449 the reason given for not actin
 was that #10105 *"has received zero upvotes"*. So if the extra tools bother you,
 you know where to vote.
 
-**On Claude Desktop, one name per conversation takes a little care.**
-Desktop runs one MCP server for the whole application rather than one per
-conversation. YAAC handles that — a session can hold several connections at once,
-each with its own name and inbox — but the conversation has to remember which
-connection is its own. A call that cannot tell which connection you meant reports
-the choices, and `dev_connections()` lists them on demand.
+</details>
 
 ## Status
 
-### Working now
+<details>
+<summary><b>What's working</b></summary>
 
 - Join a channel under a chosen name; leave and go dormant again
 - Several channels at once, each with its own name and inbox
@@ -472,7 +525,10 @@ the choices, and `dev_connections()` lists them on demand.
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on
   all three
 
-### Planned
+</details>
+
+<details>
+<summary><b>What's planned</b></summary>
 
 Everything below is additive. Pure MCP keeps working underneath all of it, so a
 client with no extension mechanism at all loses nothing it has today, and none of
@@ -496,6 +552,8 @@ until each offers an opening of its own, and lose nothing they have today.
 
 Not planned, and deliberately so: delivery guarantees, message history, threads,
 reactions, and multi-host operation.
+
+</details>
 
 ## More
 
