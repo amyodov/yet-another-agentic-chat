@@ -265,8 +265,9 @@ async def test_the_wire_says_the_secret_has_to_outlive_a_compaction(endpoint: st
     described = {t["name"]: t for t in tools}
 
     # Where the secret is handed out, said in the description itself.
-    joining = described["join_channel"]["description"]
-    assert "MUST survive any\ncompaction" in joining and "call\nthis again with the same channel and name" in joining
+    # Whitespace-normalised, so a rewrap of the docstring is not a failure.
+    joining = " ".join(described["join_channel"]["description"].split())
+    assert "MUST survive any compaction" in joining and "call this again with the same channel and name" in joining
 
     # And on every tool that asks for it back, since that is the argument a compacted model has to produce.
     for name in ("send", "peers", "check_inbox", "leave_channel"):

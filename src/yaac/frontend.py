@@ -230,8 +230,9 @@ async def join_channel(
 
     Returns a connection_id and a peer_secret that send, peers and check_inbox all require. Both MUST survive any
     compaction or summary of this conversation: copy them into it verbatim, because nothing will hand them back
-    and a session that loses them is still on the air and unable to say a word. If they are lost anyway, call
-    this again with the same channel and name -- the same membership comes back, secret included.
+    and a session that loses them is still on the air and unable to say a word. If they are lost anyway, or the
+    client restarted and the tools no longer know them, call this again with the same channel and name -- the
+    same membership comes back, secret included.
     """
     # The only validation a name ever gets, and it is here rather than on the wire: hard rule 4 keeps the hat and
     # the protocol out of names entirely. Completely empty is what an unexpanded template looks like, not a choice

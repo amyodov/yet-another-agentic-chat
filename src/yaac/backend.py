@@ -519,13 +519,20 @@ class Backend:
         bookkeeping. With several open it is required, because guessing would deliver to the wrong channel.
         """
         if not self.memberships:
-            raise NotConnected("not connected -- call join_channel first")
+            raise NotConnected(
+                "not connected: this server holds no membership, which is also what a restarted client looks like. "
+                "Call join_channel with the same channel and name, and peer_uid if you still have it, to get it back."
+            )
         if connection_id is None:
             if len(self.memberships) > 1:
                 raise AmbiguousConnection(self.describe_all())
             return next(iter(self.memberships.values()))
         if (membership := self.memberships.get(connection_id)) is None:
-            raise NotConnected(f"no open connection with id {connection_id!r}")
+            raise NotConnected(
+                f"no open connection with id {connection_id!r}: it is from a server process that is gone, or from "
+                "another conversation. join_channel with the same channel and name reclaims a membership; "
+                "dev_connections lists the ones this process holds."
+            )
         return membership
 
     def _spawn(self, coro, name: str) -> asyncio.Task:
