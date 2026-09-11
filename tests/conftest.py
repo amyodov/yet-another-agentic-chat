@@ -13,6 +13,15 @@ import pytest
 _ports = itertools.count(19820)
 
 
+@pytest.fixture(autouse=True)
+def _no_inbox_socket_of_our_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A suite run from inside a Claude Code session inherits that session's inbox socket, and a Backend under
+    test would then deliver its messages into the developer's own conversation -- which happened, once, before
+    this fixture existed. Tests that want the door set the variable themselves."""
+    monkeypatch.delenv("CLAUDE_CODE_MESSAGING_SOCKET", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_MESSAGING_TOKEN", raising=False)
+
+
 def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> Mapping[str, Callable]:
     """Choose each test's event-loop flavor. Only Windows has one to choose.
 

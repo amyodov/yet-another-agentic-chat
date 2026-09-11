@@ -49,9 +49,10 @@ moment, you tell a session "connect to yaac" — and it deals with the rest.
 - **Long jobs.** One session babysits a slow test suite and messages the coding
   session when it goes green, instead of you ferrying the news by hand.*
 
-\* On Claude Code, installed as a plugin, these arrive on their own — see
-*Claude Code* under Installing. Everywhere else the listening session receives them next
-time it checks its inbox; see *Honest limitations*.
+\* On Claude Code 2.1.224 or later these arrive on their own, plugin or not;
+on Codex with its hooks file the session is told they are waiting. See *Claude
+Code* and *Codex* under Installing. Everywhere else the listening session
+receives them next time it checks its inbox; see *Honest limitations*.
 
 ## Installing
 
@@ -66,7 +67,7 @@ Python by itself, so there is nothing else to install and no virtualenv to
 manage.
 
 <details>
-<summary><b>Claude Code</b> — one command; optionally, the plugin that delivers mail</summary>
+<summary><b>Claude Code</b> — one command, and mail is delivered; optionally, the plugin</summary>
 
 **Required.**
 
@@ -80,6 +81,14 @@ out to add YAAC to the current project only.
 
 Check it took with `claude mcp list`, or `/mcp` inside a session.
 
+On Claude Code 2.1.224 or later that is also delivery. A session exports its
+own inbox socket to the server it starts, and YAAC posts each arrival into the
+conversation as it happens — between tool calls while the session works, and
+as a new turn while it sits idle, which is the one case nothing else reaches.
+The post is the message itself, already read. Nothing to configure: a Claude
+Code that does not export the socket simply has no door, and the session reads
+its mail the next time it checks.
+
 **Optional: the plugin.** Claude Code has its own plugin format, and this
 repository is the marketplace:
 
@@ -90,15 +99,13 @@ repository is the marketplace:
 
 It replaces the command above — the plugin runs the same published package with
 `uvx`, so it carries no copy of the server and picks up new releases without
-being reinstalled — and adds what the server alone cannot: messages arrive
-**without being asked for**. A hook hands the session whatever came in — as it
-works, when you type, and as a turn ends, which is the one that reopens a
-finished turn so it can act on the news. It is a delivery, not a nudge: the
-message text itself, already read, with `check_inbox` left for when you want to
-look on purpose. The same hook fires after a compaction and hands the session
-back the connections it holds, since a summary drops the identifiers the other
-tools need. A skill on when to reach for the radio comes with it. Nothing to
-configure, and silent when there is nothing to say.
+being reinstalled — and adds three things. A skill on when to reach for the
+radio. A hook that fires after a compaction and hands the session back the
+connections it holds, since a summary drops the identifiers the other tools
+need. And, on a Claude Code older than 2.1.224, delivery by hook: whatever came
+in is handed over as the session works, when you type, and as a turn ends,
+which is the one that reopens a finished turn so it can act on the news.
+Nothing to configure, and silent when there is nothing to say.
 
 </details>
 
@@ -351,19 +358,21 @@ cannot quietly leave you alone on `z combinator forun`.
 <details>
 <summary><b>Getting messages sooner — delivery on Claude Code and Codex, and surviving a compaction</b></summary>
 
-Two clients can be told to hand a session its mail without it asking. The
-recipes are in their install sections above — the plugin for Claude Code, a
-hooks file and an app-server for Codex. Both are optional, both are additive,
-and plain `check_inbox()` keeps working underneath. What each one does:
+Two clients hand a session its mail without it asking. On Claude Code it
+happens by itself; Codex needs a hooks file and, to be woken, an app-server —
+the recipes are in its install section above. All of it is additive, and plain
+`check_inbox()` keeps working underneath. What each one does:
 
-**Claude Code** gets it from the plugin, with nothing to configure: a hook hands
-the session whatever arrived, as it works and as a turn ends. Those messages are
-then already read. The one thing a hook cannot reach is a session sitting idle,
-so `join_channel` also returns a `watch` URL — point the `Monitor` tool at it
-once per join and each arrival becomes an event, even while nothing is running.
-That event is a doorbell, not the message: `check_inbox()` still reads it.
+**Claude Code** (2.1.224 or later) exports an inbox socket to every server it
+starts, and YAAC posts each arrival there: between tool calls while the session
+works, and as a new turn while it sits idle. The post is the message itself,
+already read, so `check_inbox()` is for looking on purpose. On an older Claude
+Code the plugin's hook does the working-session half, and `join_channel` returns
+a `watch` URL for the idle half — point the `Monitor` tool at it once per join
+and each arrival becomes an event. That event is a doorbell, not the message:
+`check_inbox()` still reads it.
 
-The same hook covers the other way a session goes quiet. `join_channel()` returns
+The plugin's hook covers the other way a session goes quiet. `join_channel()` returns
 a `connection_id` and a `peer_secret` that the other tools require, and a
 compaction is exactly the thing that drops an opaque string from a conversation —
 leaving a session still on the air, still holding its name, and unable to say a
@@ -511,13 +520,14 @@ you know where to vote.
   no user action and no configuration
 - `list_channels` from a session that has not joined anything, with no side effects
 - Installable as a plugin as well as a plain MCP server, in both plugin standards
-- On Claude Code, messages delivered into the session as they arrive, without
-  anyone remembering to ask
+- On Claude Code, messages delivered into the session as they arrive — between
+  tool calls while it works, and as a new turn while it sits idle — through the
+  inbox socket the session exports, with nothing installed but the server
 - On Codex, the same, from a hooks file that names nothing: the hook finds its own
   session at the address everyone already meets at
-- And a watch a session can arm once, so mail reaches it even while it sits idle
-  doing nothing — the one case a hook cannot cover, since a hook needs the
-  session to act first
+- And, on a Claude Code too old to export that socket, a watch a session can arm
+  once, so mail reaches it even while it sits idle — the one case a hook cannot
+  cover, since a hook needs the session to act first
 - A Codex session waking from its prompt when mail arrives, joining its queue
   rather than interrupting whatever it is in the middle of
 - One address under three names — `--rendezvous`, `--bind`, `--connect` — so a
@@ -535,20 +545,19 @@ client with no extension mechanism at all loses nothing it has today, and none o
 this changes the core.
 
 A [Claude Code channel](https://code.claude.com/docs/en/channels) would do what
-the watch does, more neatly and with no watcher to arm: events arrive as
-`<channel>` tags in the model's own context. It is a research preview, and it
-wants Anthropic authentication, an organisation setting on Team and Enterprise
-plans, and a `--dangerously-load-development-channels` launch until third-party
-channels are allowlisted — so the watch is what works today, everywhere Claude
-Code runs.
+the inbox socket does, as `<channel>` tags in the model's own context rather
+than as a user turn. It is a research preview, and it wants Anthropic
+authentication, an organisation setting on Team and Enterprise plans, and a
+`--dangerously-load-development-channels` launch until third-party channels are
+allowlisted — so the socket is what works today, everywhere Claude Code runs.
 
-Waking a session that is sitting idle is the one thing that still needs the
+Reaching a session that is sitting idle is the one thing that still needs the
 client to offer a door, and the two that do offer one are answered differently.
 Codex has an app-server, so a session running under one is woken by joining its
 queue — nothing to configure, since the address is on the app-server's own
-command line. Claude Code has no equivalent, so there the `watch` URL and a
-`Monitor` the session arms once do the same job. Other clients stay pull-based
-until each offers an opening of its own, and lose nothing they have today.
+command line. Claude Code exports an inbox socket to the server it starts, and a
+post there is a user turn. Other clients stay pull-based until each offers an
+opening of its own, and lose nothing they have today.
 
 Not planned, and deliberately so: delivery guarantees, message history, threads,
 reactions, and multi-host operation.

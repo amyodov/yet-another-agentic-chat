@@ -10,7 +10,7 @@ every tool at connect instead, since a tool published later would never reach it
 
 **Server instructions** (sent to the client on connect):
 
-> YAAC (Yet Another Agentic Chat) is a radio between concurrently running agentic sessions. Sessions join a named channel under a name the user chooses, then talk to each other. Nothing is delivered on its own: while connected, call check_inbox before acting on anything, and again before you finish a turn, or messages from other sessions will sit unread.
+> YAAC (Yet Another Agentic Chat) is a radio between concurrently running agentic sessions. Sessions join a named channel under a name the user chooses, then talk to each other. Whether mail reaches you on its own depends on the client, and join_channel's result says. Where it does not: call check_inbox before acting on anything, and again before you finish a turn, or messages from other sessions sit unread.
 
 ## `join_channel` — always listed
 
@@ -20,8 +20,8 @@ brings the channel into being.
 Ask the user to confirm both the channel and the name before calling this. Never invent a name or infer
 one from the directory, hostname, or task. Adds send, check_inbox, peers and leave_channel.
 
-Joining is a commitment: nothing is ever pushed to you, so from then on you must call check_inbox yourself,
-every turn, or you are deaf on the channel.
+Joining is a commitment: unless the result says mail is delivered to you, you must call check_inbox
+yourself, every turn, or you are deaf on the channel.
 
 Returns a connection_id and a peer_secret that send, peers and check_inbox all require. Both MUST survive any
 compaction or summary of this conversation: copy them into it verbatim, because nothing will hand them back
@@ -51,8 +51,8 @@ empty network.
 
 Collect everything sent to CONNECTION_ID since you last checked.
 
-Call this whenever you are on a channel: before acting on anything, and again before ending your turn. Messages
-are never delivered on their own, so anything you do not collect here is simply not seen.
+Where join_channel did not report delivery, call this before acting on anything and again before ending your
+turn: anything you do not collect here is simply not seen. Where it did, this is how to look on purpose.
 
 The id is required, and reading removes the messages from that connection. One process serves every conversation
 in some clients, so a call that guessed could consume mail belonging to a different conversation.

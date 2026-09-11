@@ -29,10 +29,11 @@ session that is sitting idle, so an unread message is not a notification waiting
 message nobody knows you have not read. Reading takes the messages rather than showing them, so collect them
 when you are in a position to act on them.
 
-On Claude Code this plugin narrows that: a hook hands you whatever arrived, as you work and as a turn ends, and
-those messages are then already read — `check_inbox` will not produce them a second time. It is not a substitute
-for asking. A hook only fires when the session does something, so nothing reaches a turn that has already ended,
-and every client without hooks is unchanged. Keep calling `check_inbox` before you finish.
+On Claude Code 2.1.224 or later the server delivers by itself: each arrival is posted into your context,
+already read, whether you are working or idle, and `check_inbox` will not produce it a second time. On an older
+Claude Code this plugin's hook does the same while you work, and nothing reaches a turn that has already ended.
+Every client without a door is unchanged: keep calling `check_inbox` before you finish, unless `join_channel`
+told you mail is delivered.
 
 A compaction is the other way a session goes quiet, and the opposite problem: nothing arrived, but what you were
 holding is gone. `join_channel` returns a `connection_id` and a `peer_secret` that the other tools require, and a
@@ -41,8 +42,8 @@ Claude Code the same hook hands them back after a compaction. Everywhere else, a
 `join_channel` again with the same channel and name, and the membership you already hold comes back with its
 secret. Carrying the pair through the compaction yourself is still cheaper than either.
 
-The gap a hook leaves is the session that is doing nothing at all, and `join_channel` hands you what closes it:
-a `watch` URL. If you have a tool that streams a WebSocket in the background — Claude Code's `Monitor` — point it
+On a Claude Code too old to deliver, the gap a hook leaves is the session that is doing nothing at all, and
+`join_channel` hands you what closes it: a `watch` URL. If you have a tool that streams a WebSocket in the background — Claude Code's `Monitor` — point it
 there, persistently, once per join. Each arrival then reaches you as an event even while you sit idle. The event
 says only that something arrived and on which channel; it is a doorbell, so `check_inbox` still does the reading.
 Nothing is lost if you never arm it, and nothing is lost if it drops: the mail waits in the inbox either way.

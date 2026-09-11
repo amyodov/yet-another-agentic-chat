@@ -18,8 +18,9 @@ connected, and a tool result is paid **once per call**. So:
   is charged to every turn of every session that has the server installed, joined or not.
 - Descriptions must carry the whole usage flow **unaided** — no client is obliged to surface server
   instructions, and no skill is installed on the far side. The two flow-critical facts they must keep alive:
-  joining commits the model to polling `check_inbox` every turn, and a reply only ever arrives through
-  `check_inbox`. Weakening either turns a working radio into an apparently deaf one.
+  joining commits the model to polling `check_inbox` every turn unless the join result reported delivery, and a
+  reply only ever arrives through `check_inbox` or that delivery. Weakening either turns a working radio into an
+  apparently deaf one.
 - Dormant-visible tools (`list_channels`, `join_channel`) are the whole context cost YAAC imposes on sessions
   that never join; be strictest about their length.
 - Parameter `Field` descriptions are part of the surface too — a model fills arguments from them.

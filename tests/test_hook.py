@@ -17,7 +17,7 @@ import pytest
 
 from yaac import frontend, protocol
 from yaac import hook as yaac_hook
-from yaac.backend import Backend
+from yaac.backend import Backend, shown
 from yaac.protocol import Address, Scope
 
 FORUM = "forum"
@@ -180,14 +180,14 @@ async def test_a_whisper_is_told_apart_from_a_broadcast(radios: RadioFactory) ->
 )
 def test_every_kind_of_inbox_entry_has_a_line(message: dict[str, Any], line: str) -> None:
     """Bounces and refusals sit in the same inbox as messages and matter as much -- a send that failed is news."""
-    assert frontend._shown(message) == line
+    assert shown(message) == line
 
 
 def test_a_body_is_delivered_whole(radios) -> None:
     """Nothing is trimmed, because the messages are taken from the inbox as they are shown: anything held back
     would be held back for good, where check_inbox would have handed over all of it."""
     body = "x" * 50_000
-    assert frontend._shown(aloud("bob", body)).endswith(body)
+    assert shown(aloud("bob", body)).endswith(body)
 
 
 @pytest.mark.parametrize(

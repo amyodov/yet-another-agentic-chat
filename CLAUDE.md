@@ -37,12 +37,13 @@ src/yaac/
   directory.py  the client side of `sessions` — who is running here, asked at the rendezvous point
   hook.py       `yaac-hook`, the program Codex runs because its hooks cannot call a tool
   wake.py       starting a turn in an idle Codex session through its app-server
+  messaging_socket.py  delivering into the Claude Code session that started us, through the inbox socket it exports
   processes.py  the process tree: ancestry, and command lines, on all three OSes
   chat.py       the terminal client's entry point; imports textual only once it knows it is there
   chat_app.py   the terminal client itself
 ```
 
-The last five are all delivery: getting a message in front of a session that did not ask for it. Nothing in them
+The last six are all delivery: getting a message in front of a session that did not ask for it. Nothing in them
 touches the wire — the hat is not involved and there is no second process to find, because the hook runs inside
 the process that owns the inbox.
 
@@ -104,8 +105,10 @@ than this line. What it says today is that the direction of travel is away from 
 a request at all, and the schema has no `ServerRequest` type to do it with; `sampling/createMessage`, roots and
 logging are deprecated with a twelve-month window; and the one long-lived server→client stream,
 `subscriptions/listen`, carries a closed set of four change notifications, three with empty parameters and one
-carrying a URI and no body. Delivery is therefore pull-only, which is why the tool descriptions have to carry
-the reminder to call `check_inbox`.
+carrying a URI and no body. Delivery is therefore pull-only — from MCP. What reaches an idle session comes through a door the host
+leaves open, and two do: Codex an app-server, Claude Code an inbox socket. The tool descriptions carry the
+reminder to call `check_inbox` for every client that leaves neither, and `join_channel`'s result says which
+kind of session this is.
 
 The revision that introduced this went further in the same direction than the wording above suggests: it removed
 `initialize` and protocol-level sessions entirely, and **Multi Round-Trip Requests replaced server-initiated
@@ -238,6 +241,23 @@ does not exist. Both facts are visible in the binary's strings as well as on the
 
 Found by Vadim, who had the queue working before YAAC did; the busy-thread comparison and the fallback's
 discrimination were measured here.
+
+**Claude Code exports its inbox socket to the MCP server it starts, and a line written there is a user turn.**
+Measured on 2026-09-08 against 2.1.261, from a server started by the session itself: `CLAUDE_CODE_MESSAGING_SOCKET`
+and `CLAUDE_CODE_MESSAGING_TOKEN` are in the server's environment (servers Claude Desktop starts carry neither), and
+two NDJSON lines -- `{"type":"auth","token":…}` then `{"type":"user","message":{"role":"user","content":…}}`, the
+Agent SDK's stream-json user message -- landed in the session's context at its next tool round, framed as "another
+Claude session sent a message". The docs say the same line starts a new turn when the session is idle, which is
+the case neither a hook nor MCP reaches. The socket answers nothing and drops an unknown `type` without a word,
+which is how three guesses at the shape vanished before the real one was read out of the binary's own usage
+snippet; a top-level `from` is ignored, so the sender goes in the content. The token is optional on macOS and
+Linux and required on native Windows, where the door is a named pipe -- measured on macOS only.
+
+Two consequences. The suite, run from inside a Claude Code session, inherits those variables, and a `Backend`
+under test delivered a test message into the developer's own conversation; `conftest.py` scrubs both. And the
+registry the client keeps at `~/.claude/sessions/<pid>.json` -- `sessionId`, `name`, `cwd`, `status`,
+`messagingSocketPath` -- is plain JSON that names every session's socket, which is what makes reaching a session
+that never joined YAAC possible; nothing reads it today, and doing so is a design question rather than a step.
 
 **Binding a busy port fails in ~0.4 ms** with `EADDRINUSE`. That is why every backend can just try.
 
