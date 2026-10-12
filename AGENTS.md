@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 See `README.md` for what YAAC does. This file is about working on it.
 

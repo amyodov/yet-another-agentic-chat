@@ -12,7 +12,7 @@
     ".github"
   ],
   "excludeFiles": [
-    "CLAUDE.md",
+    "AGENTS.md",
     "zmq.md"
   ],
   "rules": [

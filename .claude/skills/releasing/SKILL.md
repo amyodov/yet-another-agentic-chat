@@ -57,7 +57,7 @@ git tag v$1 && git push origin v$1
 gh release create v$1 --title "v$1 — <short summary>" --notes "<what changed and why it matters>"
 ```
 
-Release notes follow the prose rules in CLAUDE.md: what changed and what it displaces, not a file list.
+Release notes follow the prose rules in AGENTS.md: what changed and what it displaces, not a file list.
 Creating the release is the publish trigger — after this line, the release is happening.
 
 ## 4. Watch and verify

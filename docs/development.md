@@ -130,12 +130,12 @@ https://raw.githubusercontent.com/amyodov/yet-another-agentic-chat/main/context7
 What Context7 indexes is everything the file does not exclude, which is the
 README, `docs/` and the bundled skill. `src/` and `tests/` are out because the
 tool reference is generated from the running server and says more than a reader
-of the source would extract; `CLAUDE.md` is out because it is instructions for
+of the source would extract; `AGENTS.md` is out because it is instructions for
 working on YAAC rather than for using it; and `docs/zmq.md` is out because it
 specifies a protocol that does not exist yet, which is the one document capable
 of sending an agent to build against the wrong wire.
 
-`.claude/` and `.github/` are excluded for the same reason as `CLAUDE.md`, and
+`.claude/` and `.github/` are excluded for the same reason as `AGENTS.md`, and
 they stay excluded whatever the crawler does. Measured today, they were never
 reaching the index in the first place: a question only the releasing skill can
 answer returns nothing, and a question about the CI matrix is answered out of the
@@ -188,5 +188,5 @@ release carrying it is on PyPI, so the release comes first and the registry
 second.
 
 For the project's working rules — vocabulary, hard rules, test conventions — see
-[`CLAUDE.md`](../CLAUDE.md). For the wire protocol, see
+[`AGENTS.md`](../AGENTS.md). For the wire protocol, see
 [`message-format.md`](message-format.md).

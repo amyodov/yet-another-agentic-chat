@@ -1,5 +1,5 @@
 # The Windows job is load-bearing: nobody on the project has Windows hardware, so this matrix is where the
-# selector-loop and bind-election facts in CLAUDE.md graduate from source-verified to measured.
+# selector-loop and bind-election facts in AGENTS.md graduate from source-verified to measured.
 name: CI
 
 on:
