@@ -491,7 +491,7 @@ async def test_acting_as_a_peer_needs_that_peer_s_secret(endpoint: str, monkeypa
     backend = Backend(endpoint)
     monkeypatch.setattr(frontend, "_radio", backend)
     try:
-        joined = await frontend.join_channel(None, "forum", "ann")
+        joined = await frontend.join_channel("forum", "ann")
         assert len(joined["peer_uid"]) == 26
         assert len(joined["peer_secret"]) == 26
         assert joined["peer_secret"] != joined["peer_uid"]

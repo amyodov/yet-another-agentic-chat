@@ -36,12 +36,12 @@ def describe_annotations(tool: Any) -> str:
     return f"{said[0].capitalize()}{''.join(f'; {s}' for s in said[1:])}."
 
 
-def tool_section(tool: Any, availability: str) -> list[str]:
+def tool_section(tool: Any) -> list[str]:
     schema = tool.parameters or {}
     properties: dict[str, Any] = schema.get("properties", {})
     required = set(schema.get("required", []))
 
-    lines = [f"## `{tool.name}` — {availability}", "", tool.description.strip(), ""]
+    lines = [f"## `{tool.name}`", "", tool.description.strip(), ""]
     if annotations := describe_annotations(tool):
         lines += [f"*{annotations}*", ""]
     if properties:
@@ -55,21 +55,13 @@ def tool_section(tool: Any, availability: str) -> list[str]:
 
 def main() -> None:
     mcp = frontend.mcp
-    on_air_names = {fn.__name__ for fn in frontend.ON_AIR_TOOLS}
-    # The same call `join_channel` makes at runtime, so schemas and annotations come out identical to the wire.
-    frontend.publish_on_air_tools()
-
-    clients = ", ".join(f"`{name}`" for name in sorted(frontend.CLIENTS_THAT_NEVER_RELIST))
     lines = [
         "# MCP tools",
         "",
         GENERATED_MARK,
         "",
-        "What a connected client sees. A dormant session lists only the two always-listed tools; the rest are",
-        "published on the first `join_channel` and withdrawn when the last channel is left.",
-        "",
-        "That holds for a client that acts on `notifications/tools/list_changed`. One that does not is given",
-        f"every tool at connect instead, since a tool published later would never reach it: {clients}.",
+        "What a connected client sees. Every tool is listed from the start, the same for every client; the ones",
+        "that act on a channel answer with an error naming `join_channel` until the session has joined one.",
         "",
         "**Server instructions** (sent to the client on connect):",
         "",
@@ -79,10 +71,10 @@ def main() -> None:
     # The hook's tool is registered but withheld from every tools/list, so a client never sees it and neither does
     # this reference, which documents what a client is served.
     tools = [tool for tool in mcp._tool_manager.list_tools() if tool.name != frontend.HOOK_TOOL]
-    # Always-listed tools first, then the on-air set; alphabetical within each group so the output is stable.
-    for tool in sorted(tools, key=lambda t: (t.name in on_air_names, t.name)):
-        availability = "listed only while on air" if tool.name in on_air_names else "always listed"
-        lines += tool_section(tool, availability)
+    # The two that work before a join first, in the order a session meets them; the rest alphabetically.
+    first = ("join_channel", "list_channels")
+    for tool in sorted(tools, key=lambda t: (t.name not in first, t.name)):
+        lines += tool_section(tool)
 
     output = Path("docs/tools.md")
     output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

@@ -221,6 +221,13 @@ def reachable_from_elsewhere(endpoint: str) -> bool:
     return host is not None and host not in LOOPBACK
 
 
+NOT_JOINED = (
+    "not connected: this server holds no membership, which is also what a restarted client looks like. Call "
+    "join_channel with the same channel and name, and peer_uid if you still have it, to get it back."
+)
+"""Said to a call that needs a membership when none is held -- before the first join, or after a restart."""
+
+
 class NotConnected(Exception):
     """Raised when an operation needs a membership and there is none, or the connection id is unknown."""
 
@@ -556,10 +563,7 @@ class Backend:
         bookkeeping. With several open it is required, because guessing would deliver to the wrong channel.
         """
         if not self.memberships:
-            raise NotConnected(
-                "not connected: this server holds no membership, which is also what a restarted client looks like. "
-                "Call join_channel with the same channel and name, and peer_uid if you still have it, to get it back."
-            )
+            raise NotConnected(NOT_JOINED)
         if connection_id is None:
             if len(self.memberships) > 1:
                 raise AmbiguousConnection(self.describe_all())

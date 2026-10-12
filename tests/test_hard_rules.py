@@ -23,6 +23,7 @@ import pytest
 from yaac import frontend
 from yaac.backend import (
     LOG_QUEUE,
+    NOT_JOINED,
     ConnectionRefused,
     add_rendezvous_flags,
     chosen_rendezvous,
@@ -93,7 +94,7 @@ def decode(stdout: bytes) -> list[dict]:
 
 
 def handshake(client_name: str = "test") -> list[dict]:
-    """Initialize, confirm, and list -- as the named client. The name decides whether the tool list may change."""
+    """Initialize, confirm, and list -- as the named client. The name must decide nothing about the list."""
     return [
         {
             "jsonrpc": "2.0",
@@ -111,8 +112,8 @@ def handshake(client_name: str = "test") -> list[dict]:
 
 
 HANDSHAKE = handshake()
-DORMANT_TOOLS = {"list_channels", "join_channel"}
-EVERY_TOOL = DORMANT_TOOLS | {"send", "check_inbox", "peers", "leave_channel", "dev_connections"}
+EVERY_TOOL = {"list_channels", "join_channel", "send", "check_inbox", "peers", "leave_channel", "dev_connections"}
+CLIENTS = ["test", "claude-code", "codex-mcp-client"]
 
 
 async def test_startup_writes_only_json_rpc_to_stdout(endpoint: str) -> None:
@@ -160,36 +161,28 @@ async def test_the_server_never_writes_a_file_dormant_or_on_air(endpoint: str, t
     assert list(runtime.iterdir()) == []
 
 
-@pytest.mark.parametrize(
-    "client_name,expected",
-    [("test", DORMANT_TOOLS), ("codex-mcp-client", EVERY_TOOL)],
-    ids=["acts-on-the-notification", "ignores-it"],
-)
-async def test_the_dormant_tool_surface_is_what_this_client_can_act_on(
-    endpoint: str, client_name: str, expected: set[str]
-) -> None:
-    """A dormant server runs in every session the user has, so its tool surface is the whole cost it imposes on the
-    sessions that never join a channel. Paying that cost only buys something on a client that re-reads the list;
-    on one that does not, a withheld tool is withheld for the whole session."""
+@pytest.mark.parametrize("client_name", CLIENTS)
+async def test_every_client_is_offered_every_tool_from_the_start(endpoint: str, client_name: str) -> None:
+    """A list that grew on the first join was announced with tools/list_changed, which MCP 2026-07-28 delivers only
+    to a client that opened subscriptions/listen, and which Claude Code stopped acting on once MCP tools moved behind
+    ToolSearch: sessions joined and never saw send. So the list is the same for every client, joined or not, and the
+    server does not claim it can change."""
     stdout, _ = await run_server(endpoint, handshake(client_name))
     [init] = [m["result"] for m in decode(stdout) if m.get("id") == 1]
     [tools] = [m["result"]["tools"] for m in decode(stdout) if m.get("id") == 2]
 
-    # A client acts on notifications/tools/list_changed only if the server said its list can change. Advertising
-    # false and then sending the notification is correctly ignored, which is what made an earlier version of this
-    # code look as though the client were at fault.
-    assert init["capabilities"]["tools"] == {"listChanged": True}
-    assert {t["name"] for t in tools} == expected
+    assert init["capabilities"]["tools"] == {"listChanged": False}
+    assert {t["name"] for t in tools} == EVERY_TOOL
     # Tool descriptions are read by a model on every session; an undescribed tool is one it will misuse.
     assert [t["name"] for t in tools if not t["description"].strip()] == []
 
 
-@pytest.mark.parametrize("client_name", ["test", "codex-mcp-client"], ids=["relists", "does-not"])
+@pytest.mark.parametrize("client_name", CLIENTS)
 async def test_the_hooks_tool_is_callable_but_never_offered(endpoint: str, client_name: str) -> None:
     """`hook_report` exists for Claude Code's `mcp_tool` hooks, which name the tool they call and do not need it
     listed. Listing it would put a second, differently-behaved `check_inbox` in front of the model on every
     session; unregistering it would make the hook fail on every tool call, in a session that has joined nothing as
-    much as in one that has. So it is registered and withheld, in both states and for either kind of client."""
+    much as in one that has. So it is registered and withheld, joined or not, for every client."""
     join = {
         "jsonrpc": "2.0",
         "id": 3,
@@ -245,8 +238,7 @@ async def test_each_tool_tells_the_client_what_calling_it_costs(
     look and must not be -- it takes the messages, so a speculative call consumes mail in a context that may have
     no way to act on it. The listing itself is asserted, not the constants, because the wire is what a client sees.
     """
-    # codex-mcp-client gets all seven at connect, which is how the on-air tools reach a single tools/list here.
-    stdout, _ = await run_server(endpoint, handshake("codex-mcp-client"))
+    stdout, _ = await run_server(endpoint, HANDSHAKE)
     [tools] = [m["result"]["tools"] for m in decode(stdout) if m.get("id") == 2]
     [listed] = [t for t in tools if t["name"] == tool]
     assert listed["annotations"] == expected
@@ -260,7 +252,7 @@ async def test_the_wire_says_the_secret_has_to_outlive_a_compaction(endpoint: st
     reason to treat an opaque string as worth carrying. Asserted off `tools/list` rather than off the constants,
     because the description a client actually receives is the one that matters.
     """
-    stdout, _ = await run_server(endpoint, handshake("codex-mcp-client"))
+    stdout, _ = await run_server(endpoint, HANDSHAKE)
     [tools] = [m["result"]["tools"] for m in decode(stdout) if m.get("id") == 2]
     described = {t["name"]: t for t in tools}
 
@@ -275,20 +267,9 @@ async def test_the_wire_says_the_secret_has_to_outlive_a_compaction(endpoint: st
         assert "verbatim through any compaction" in asked
 
 
-@pytest.mark.parametrize(
-    "client_name,after_leaving,notifications",
-    [
-        ("test", DORMANT_TOOLS, ["notifications/tools/list_changed"] * 2),
-        ("codex-mcp-client", EVERY_TOOL, []),
-    ],
-    ids=["acts-on-the-notification", "ignores-it"],
-)
-async def test_the_tool_list_only_moves_for_a_client_that_would_notice(
-    endpoint: str, client_name: str, after_leaving: set[str], notifications: list[str]
-) -> None:
-    """Going on air adds five tools and leaving takes them back, announced each way. For a client that never
-    re-reads the list there is nothing to announce: it was given everything at launch and keeps it, so a
-    notification would only claim a change the client cannot see and the withdrawal would be permanent."""
+async def test_the_tool_list_never_moves_and_says_nothing(endpoint: str) -> None:
+    """Joining and leaving change what a call does, never what is listed -- and a server that announced a change
+    nobody can act on would only invite a client to re-read a list that is the same."""
     connect = {
         "jsonrpc": "2.0",
         "id": 3,
@@ -308,16 +289,36 @@ async def test_the_tool_list_only_moves_for_a_client_that_would_notice(
         }
 
     final = {"jsonrpc": "2.0", "id": 6, "method": "tools/list"}
-    stdout, _ = await run_server(endpoint, handshake(client_name) + [connect, listing, leave, final])
+    stdout, _ = await run_server(endpoint, HANDSHAKE + [connect, listing, leave, final])
     messages = decode(stdout)
 
     def listed(request_id):
         [tools] = [m["result"]["tools"] for m in messages if m.get("id") == request_id]
         return {t["name"] for t in tools}
 
-    assert listed(4) == EVERY_TOOL
-    assert listed(6) == after_leaving
-    assert [m["method"] for m in messages if m.get("method")] == notifications
+    assert [listed(2), listed(4), listed(6)] == [EVERY_TOOL] * 3
+    assert [m["method"] for m in messages if m.get("method")] == []
+
+
+@pytest.mark.parametrize(
+    "tool,arguments",
+    [
+        ("send", {"body": "hello"}),
+        ("check_inbox", {"connection_id": "01NOSUCHCONNECTION"}),
+        ("peers", {}),
+        ("leave_channel", {}),
+    ],
+)
+async def test_a_tool_called_before_joining_says_to_join(endpoint: str, tool: str, arguments: dict) -> None:
+    """The cost of listing everything up front is a model that calls send before join_channel. The answer has to
+    be the next step rather than a failure it cannot read, and the same answer serves a client that restarted and
+    forgot every membership it held."""
+    call = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": tool, "arguments": arguments}}
+    stdout, _ = await run_server(endpoint, HANDSHAKE + [call])
+    [answer] = [m["result"] for m in decode(stdout) if m.get("id") == 3]
+    # The same refusal whichever tool, and from a Backend never constructed: an early call leaves the process as
+    # dormant as it found it, which is hard rule 2 rather than an optimisation.
+    assert json.loads(answer["content"][0]["text"]) == {"status": "not_connected", "error": NOT_JOINED}
 
 
 @pytest.mark.parametrize(
@@ -414,7 +415,7 @@ async def test_a_server_whose_client_left_lets_go_of_the_port(endpoint: str, joi
 @pytest.mark.parametrize(
     "call,expected",
     [
-        (lambda: frontend.join_channel(None, "forum", ""), "name is empty"),
+        (lambda: frontend.join_channel("forum", ""), "name is empty"),
         (lambda: frontend.send("hello", name=""), "recipient name is empty"),
     ],
     ids=["join", "send"],
@@ -449,7 +450,7 @@ async def test_a_name_that_is_not_empty_reaches_the_backend_untouched(monkeypatc
             raise ConnectionRefused("recorded")
 
     monkeypatch.setattr(frontend, "radio", Recording)
-    answer = await frontend.join_channel(None, "forum", name)
+    answer = await frontend.join_channel("forum", name)
     assert passed == [name]
     assert answer["error"] == "recorded"
 
@@ -497,7 +498,7 @@ async def test_mentions_are_checked_before_anything_is_queued(monkeypatch, menti
         def describe_all():
             return []
 
-    monkeypatch.setattr(frontend, "radio", Recording)
+    monkeypatch.setattr(frontend, "held", lambda: Recording)
     answer = await frontend.send("hi", mentions=mentions)
     assert (answer["status"] == "accepted") is accepted
     if accepted:
@@ -541,7 +542,7 @@ async def test_a_mention_of_somebody_absent_is_carried_and_reported(monkeypatch)
         def describe_all():
             return []
 
-    monkeypatch.setattr(frontend, "radio", Recording)
+    monkeypatch.setattr(frontend, "held", lambda: Recording)
     answer = await frontend.send("hi", mentions=["Bob", "Carol"])
     assert answer["status"] == "accepted"
     assert answer["mentioned_but_absent"] == ["Carol"]

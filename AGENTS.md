@@ -77,23 +77,21 @@ Replacements, both non-draft:
 - **Departure**: `ROUTER_MANDATORY` raises `EHOSTUNREACH` when sending to a routing id that left. Eviction is lazy,
   detected on the first failed send — which is when we want to bounce anyway.
 
-**Claude Code honours `tools/list_changed`, but only if the server advertised `tools.listChanged: true`.** The SDK's
-`run_stdio_async()` hardcodes `NotificationOptions()` with every flag false, so `main` runs the low-level server
-directly to override it. Advertising false and then sending the notification looks like a client bug and isn't —
-check what `initialize` claimed first.
+**A tool list that changes with state is not one clients will follow, so every tool is listed from the start.**
+YAAC listed two tools while dormant and published five more on the first join with `notifications/tools/list_changed`.
+That broke from both ends, and both are properties of the world. MCP 2026-07-28 says list endpoints "no longer vary
+per-connection", and delivers change notifications only to a client that opened `subscriptions/listen`. And Claude
+Code, which did honour the notification when it was measured here in August 2026, stopped reaching newly published
+tools once MCP tools moved behind ToolSearch: anthropics/claude-code#66084 (open; `/mcp` reconnect or a restart), and
+#88483 for Claude Desktop, which never rebuilds the deferred pool at all. Reported from the field in October 2026: a
+session joined, was told the tools were being published, and never saw `send`. A reconnect cannot fix that, because
+it starts a fresh dormant server that publishes them the same way.
 
-So the tool list is dynamic: dormant sessions list `list_channels` and `join_channel`, the other five appear on first
-join and go on last leave.
-
-**Not every client implements `tools/list_changed`, though it has been in MCP since 2024-11-05.** One that ignores
-it would be stranded on a channel with tools it can never see, so `CLIENTS_THAT_NEVER_RELIST` in `frontend.py`
-names the exceptions and hands them everything at connect; conforming clients keep the dynamic list. The key is
-`clientInfo.name`, read off the wire with a probe server rather than guessed — check the same way before adding a
-name. Which clients, and the upstream bugs, are in the comment there and in the README.
-
-Detection wraps the `tools/list` handler: `initialize` is reserved by the SDK runner, which raises if
-`add_request_handler` is given it, and the first listing is the earliest point where the client's name is known
-and can still change the answer. `Server.middleware` would be tidier, and the SDK marks it provisional.
+Codex never re-read the list either (openai/codex#10105), and was special-cased by `clientInfo.name` until then --
+detection that 2026-07-28 removes with `initialize` itself. The answer the spec gives, "explicit, server-minted
+handles passed as ordinary tool arguments", is what `connection_id` and `peer_secret` already were. So an on-air
+tool called before a join answers `NOT_JOINED` from a `Backend` that was never constructed, and the one tool still
+withheld from the listing -- the hook's -- is withheld from every client alike.
 
 Cross-client delivery is measured, not argued: a Claude Code session and a Codex session exchanged messages both
 ways on one channel, each running its own server process.

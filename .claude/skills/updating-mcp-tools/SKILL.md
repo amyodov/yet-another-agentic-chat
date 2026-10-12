@@ -21,8 +21,8 @@ connected, and a tool result is paid **once per call**. So:
   joining commits the model to polling `check_inbox` every turn unless the join result reported delivery, and a
   reply only ever arrives through `check_inbox` or that delivery. Weakening either turns a working radio into an
   apparently deaf one.
-- Dormant-visible tools (`list_channels`, `join_channel`) are the whole context cost YAAC imposes on sessions
-  that never join; be strictest about their length.
+- Every tool is listed in every session, joined or not, so all seven descriptions are the context cost YAAC
+  imposes on sessions that never join; be strict about every one's length.
 - Parameter `Field` descriptions are part of the surface too — a model fills arguments from them.
 
 ## 2. Sync the docs

@@ -178,10 +178,6 @@ it was in YAAC at all.
 brings the skill on when to reach for the radio. The MCP server in it is the same
 `uvx` command as above.
 
-**Worth knowing.** Codex never re-reads a tool list, so YAAC lists all seven
-tools there from the start rather than two — see
-[Compatibility notes](#compatibility-notes) for why.
-
 </details>
 
 <details>
@@ -307,8 +303,7 @@ to do if you mean it; you will get a warning on stderr, not a refusal.
 Nothing happens until you say so. A freshly installed YAAC opens no socket and
 creates no file — it is a switched-off radio that knows how to be switched on.
 Idle cost is as close to zero as it gets: no listener, no connection, nothing
-on disk, and on most clients only two tools' worth of context in the session —
-the full toolset appears when you join and withdraws when you leave. The first
+on disk — only the seven tools' descriptions in the session's context. The first
 session that actually joins is the one that binds the socket for everyone.
 
 ```
@@ -339,10 +334,9 @@ Cyrillic, emoji, punctuation. Nothing is reserved, parsed, or case-folded.
 | `dev_connections()` | Diagnostic: every connection you hold, with unread counts. |
 | `leave_channel()` | Leave one channel and remove its inbox. |
 
-Only the first two are offered until you join something. The rest appear once you
-are on air and disappear when you leave the last channel, so a session that never
-joins carries almost nothing. On a client that cannot handle a changing tool list,
-all seven are listed from the start instead — see [Compatibility notes](#compatibility-notes).
+All seven are listed from the start, on every client. The five that act on a
+channel answer "not connected — call `join_channel`" until you have joined one,
+which is also what a session hears after its client restarts.
 
 You may be on more than one channel at once. `join_channel` returns a connection
 id; pass it as `connection_id` when you hold several, and leave it out when you
@@ -447,48 +441,6 @@ message in any chat: as something a person said, not as a command.
 
 </details>
 
-## Compatibility notes
-
-<details>
-<summary><b>Codex</b></summary>
-
-Codex works with YAAC. It just costs more context there than it should, and the
-reason is worth knowing.
-
-MCP lets a server change its tool list while running and say so, with
-`notifications/tools/list_changed`. YAAC uses that: a dormant session carries two
-tools, and the other five appear the moment you join a channel. Codex receives
-the notification, writes a line to its log, and re-reads nothing — the tool list
-a session sees is fixed when its thread starts, and no prompting will shake it
-loose. Left alone, a Codex session could join a channel and then be unable to
-send, read, or leave.
-
-So YAAC looks at who connected. When the client identifies itself as Codex, all
-seven tools are listed from the start, because a tool published later is one that
-client will never see. There is nothing to configure — it works, it is simply
-five tool descriptions a Codex session may never use.
-
-This is not new, and it is not obscure:
-
-- [openai/codex#10105](https://github.com/openai/codex/issues/10105) — *"Support
-  `notifications/tools/list_changed`"*, open since January 2026. Filed against a
-  part of the spec that has been there since 2024-11-05.
-- [openai/codex#12449](https://github.com/openai/codex/pull/12449) — a working
-  implementation, contributed and closed within six hours as an "unsolicited code
-  contribution". Never merged.
-- [openai/codex#33266](https://github.com/openai/codex/issues/33266) and
-  [#35583](https://github.com/openai/codex/issues/35583) — the same bug found
-  again, independently, in the CLI and in the desktop app.
-- [openai/codex#19155](https://github.com/openai/codex/issues/19155) — the same
-  stale cache, this time serving a tool schema that no longer exists.
-
-Claude Code, Gemini CLI and OpenCode all implement it. OpenAI's stated policy is
-to prioritise by community upvotes, and on #12449 the reason given for not acting
-was that #10105 *"has received zero upvotes"*. So if the extra tools bother you,
-you know where to vote.
-
-</details>
-
 ## Status
 
 <details>
@@ -500,8 +452,8 @@ you know where to vote.
   and a Codex session on one channel is a tested case, not a claim
 - A terminal client, so you can be on the channel yourself; it gets messages the
   moment they arrive, with nothing to poll
-- A tool list that grows when you connect and shrinks when you leave — and, on a
-  client that would never re-read it, is complete from the start instead
+- The same seven tools listed from the start on every client, as MCP 2026-07-28
+  asks of a list endpoint — nothing for a client to re-read, so nothing to miss
 - Direct messages and channel broadcasts, with the two distinguishable on arrival
 - Mentions: a broadcast everyone hears that calls on one person by name, which is
   a different thing from whispering to them
