@@ -373,6 +373,12 @@ These rules cover everything written in words: comments, docstrings, commit mess
   dropped", not "a stuck queue must fail, not grow silently".
 - Commit messages: the subject names the change, the body gives the reason and what it displaces. Not a list of
   files touched — the diff already shows that.
+- Tool descriptions, server instructions and the plugin's skill are read by a model on every session, not by a
+  person once. Write them as instructions: imperative, terse, no history and no reasoning the model will not act
+  on. The *why* belongs here and in the code.
+- The skill only adds to the tool surface, and has to stay that way. The plugin is the minority install, so anything
+  a session needs to use YAAC correctly goes in a tool description, the server instructions or a result, which
+  every client sees. A rule whose only copy is in the skill is a gap in the tools.
 
 ## Design notes
 
