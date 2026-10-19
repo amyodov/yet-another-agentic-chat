@@ -41,6 +41,7 @@ import logging
 import os
 import struct
 import uuid
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -70,6 +71,22 @@ def serving() -> str | None:
             logger.info("running under an app-server at %s (pid %d)", url, pid)
             return url
     return None
+
+
+def under_codex() -> bool:
+    """Whether a Codex app-server is among this process's forebears, whatever it listens on.
+
+    Codex 0.163 runs every plain `codex` session under one shared app-server it manages itself, listening on a
+    Unix socket at an internal path (`codex app-server --listen unix:// --managed-daemon`). A session there is a
+    Codex session `serving()` cannot reach, which is worth telling the model rather than leaving it to find out.
+    """
+    lines = processes.command_lines()
+    return any(_is_codex_app_server(lines.get(pid, "")) for pid in processes.ancestry())
+
+
+def _is_codex_app_server(command: str) -> bool:
+    words = command.split()
+    return bool(words) and Path(words[0].strip("\"'")).name.startswith("codex") and "app-server" in words[1:2]
 
 
 def _listened(command: str) -> str | None:

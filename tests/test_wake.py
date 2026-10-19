@@ -291,3 +291,41 @@ async def test_nothing_is_woken_without_a_thread_or_an_opt_in(
         await talker.disconnect_all()
         listener.close()
         talker.close()
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        (
+            "/opt/codex/0.163.0/bin/codex app-server --listen unix:// --managed-daemon",
+            True,
+        ),
+        ("codex app-server --listen ws://127.0.0.1:4500", True),
+        ("codex app-server daemon pid-update-loop", True),
+        ("codex resume", False),
+        ("/usr/bin/python app-server --listen unix://", False),
+        ("", False),
+    ],
+    ids=["managed", "websocket", "daemon-loop", "tui", "not-codex", "empty"],
+)
+def test_a_codex_app_server_is_recognised_whatever_it_listens_on(monkeypatch, command: str, expected: bool) -> None:
+    """The shared app-server Codex 0.163 runs every session under listens on a Unix socket, so `serving()` finds no
+    door there; recognising it is what lets YAAC say so instead of staying silently unwakeable."""
+    monkeypatch.setattr(wake.processes, "ancestry", lambda: [1, 2])
+    monkeypatch.setattr(wake.processes, "command_lines", lambda: {1: "python yaac", 2: command})
+    assert wake.under_codex() is expected
+
+
+@pytest.mark.parametrize(
+    "under_codex,serving,expected", [(True, None, True), (True, "ws://127.0.0.1:4500", False), (False, None, False)]
+)
+def test_a_session_is_stranded_only_under_codex_without_a_websocket(
+    monkeypatch, under_codex, serving, expected
+) -> None:
+    monkeypatch.setattr(wake, "under_codex", lambda: under_codex)
+    monkeypatch.setattr(wake, "serving", lambda: serving)
+    backend = Backend("tcp://127.0.0.1:1")
+    try:
+        assert backend.stranded() is expected
+    finally:
+        backend.close()

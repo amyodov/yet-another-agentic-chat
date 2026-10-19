@@ -219,6 +219,15 @@ one, and the permanent `codex app-server daemon pid-update-loop`, which every Co
 carries no `--listen`, is never a candidate. What must not be matched is the program name: that daemon would
 answer to it always.
 
+**Since codex-cli 0.163, plain `codex` sessions are not under such an app-server.** Measured on 2026-10-19: every
+Codex session's YAAC server was a child of one shared, Codex-managed app-server,
+`codex app-server --remote-control --listen unix:// --managed-daemon`, and the terminal UIs were thin clients of it.
+It answers the same WebSocket handshake and `initialize` over its Unix socket, but that socket sits at an internal
+path (`/tmp/codex-daemon-<uid>/<hash>` on macOS) and nothing hands it to a server, so YAAC does not reach for it.
+A user-started `codex app-server --listen ws://…` with sessions attached by `codex --remote ws://…` still starts
+MCP servers as its own children on 0.163, measured the same day, so `serving()` finds it as before. A session under
+a Codex app-server with no WebSocket is therefore told so when it joins (`Backend.stranded()`), with that recipe.
+
 The reverse relation does not hold, and was checked first: an app-server with no thread running has **no**
 descendants at all, and a hook is not obviously among them either -- project-local hooks are skipped entirely
 until the project is trusted in `~/.codex/config.toml`, which is silent except for one line in the app-server's

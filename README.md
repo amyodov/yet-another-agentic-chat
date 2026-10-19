@@ -112,7 +112,7 @@ Nothing to configure, and silent when there is nothing to say.
 </details>
 
 <details>
-<summary><b>Codex</b> — one config block; optionally, a hooks file and an app-server</summary>
+<summary><b>Codex</b> — a config block, a hooks file, and one app-server per machine to be woken while idle</summary>
 
 **Required.** In `~/.codex/config.toml`:
 
@@ -122,55 +122,48 @@ command = "uvx"
 args = ["yet-another-agentic-chat"]
 ```
 
-**Optional: delivery.** Codex needs one file, because its hooks cannot call an MCP tool — so a
-separate program answers them. In `~/.codex/hooks.json`, or `.codex/hooks.json`
+**Recommended: the hooks file.** In `~/.codex/hooks.json`, or `.codex/hooks.json`
 in a project:
 
 ```json
 {
   "hooks": {
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "yaac-hook"}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "yaac-hook"}]}]
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "uvx --from yet-another-agentic-chat yaac-hook"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "uvx --from yet-another-agentic-chat yaac-hook"}]}]
   }
 }
 ```
 
-Nothing to name and nothing to keep in step: `yaac-hook` asks the same address
-every participant already meets at which sessions are running here, and picks
-out its own by what its client told both halves, by the directory it was started
-in, or by the process line it shares with its server. Several Codex sessions at
-once are told apart the same way. Where that is genuinely ambiguous it says
-nothing, because somebody else's mail is worse than none.
+Approve it once with `/hooks`. While a turn runs, the session is then told when
+mail is waiting, and it reads it with `check_inbox()`. The hook is also how YAAC
+learns which Codex session it serves, which waking needs. Several sessions at
+once are told apart without any naming.
 
-Codex reviews a hook before it runs it — approve it with `/hooks`. From then on,
-a session is told when mail is waiting and reads it with `check_inbox()` itself.
-
-**Optional: waking an idle session.** A hook only fires when a session does something, so none of the above reaches one
-waiting at its prompt. Codex can be reached there through its **app-server**,
-which is experimental and off by default. Run your session under one:
+**Recommended: waking an idle session.** A hook only fires while a session is
+doing something. To reach one waiting at its prompt, YAAC needs an app-server it
+can talk to — Codex's engine, listening on a WebSocket. Run one per machine and
+leave it running:
 
 ```bash
 codex app-server --listen ws://127.0.0.1:4500
 ```
 
-That is the whole of it. There is nothing to add to `config.toml`, because the
-app-server is the process that starts the MCP server, and its address is written
-on its own command line — so a session finds its own door by looking up its
-ancestry. Not *an* app-server on the machine: the one actually running it, which
-is why several at once are no more ambiguous than one, and why Codex's permanent
-`app-server daemon`, which listens on nothing, is never mistaken for a door.
+Then start every Codex session attached to it:
 
-YAAC then puts a line in front of that session when mail arrives, exactly as if
-you had typed it — the model reads its history, hooks fire, and `check_inbox()`
-does the rest. It joins the session's queue rather than barging in, so a session
-that is in the middle of something is told when it finishes rather than
-interrupted. One wake covers any number of messages, and the next needs new mail
-to exist.
+```bash
+codex --remote ws://127.0.0.1:4500          # or: codex resume --remote ws://127.0.0.1:4500
+```
 
-The app-server is experimental, and the port is yours to pick. Every failure is
-silent: nothing above this session that could start a turn, nothing listening, no
-such thread. Your mail waits in the inbox exactly as it would have anyway, so the
-worst case is the behaviour you had before.
+That is all. YAAC finds the address on the command line of the app-server that
+started it, and when mail arrives it adds a line to that session's queue — a new
+turn if the session is idle, after the current one if it is busy. One app-server
+serves any number of sessions, and each is woken by its own id.
+
+Plain `codex` does not do this. Since 0.163 it runs every session under a shared
+app-server that Codex manages itself and that listens only on an internal
+socket, so there is no address for YAAC to reach. A session there says so when it
+joins a channel, with the commands above. Mail still waits in its inbox, so the
+worst case is reading it at the next turn.
 
 Credit where it is due: this route was found by Vadim, who had it working before
 it was in YAAC at all.
@@ -383,7 +376,8 @@ channel and name, and the membership you already hold comes back, secret
 included.
 
 **Codex** is told on every tool call, and at the end of every turn, that mail is
-waiting, and reads it with `check_inbox()` itself. Under an app-server it is also
+waiting, and reads it with `check_inbox()` itself. Attached to an app-server on a
+WebSocket — see its install section — it is also
 woken at its prompt when mail arrives — joining its queue rather than
 interrupting whatever it is in the middle of, one wake for any number of
 messages.

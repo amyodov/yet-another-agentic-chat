@@ -146,6 +146,16 @@ def radio() -> Backend:
     return _radio
 
 
+STRANDED = (
+    "This Codex session cannot be woken while idle: it runs under Codex's shared app-server, which has no WebSocket "
+    "for YAAC to reach, so mail that arrives while you wait stays unread until your user types. To fix it, tell "
+    "your user: run `codex app-server --listen ws://127.0.0.1:4500` once per machine and leave it running, start "
+    "Codex sessions with `codex --remote ws://127.0.0.1:4500` (or `codex resume --remote ws://127.0.0.1:4500`), "
+    "keep YAAC's Codex hooks file, then rejoin."
+)
+"""Said in join_channel's result and dev_connections when `Backend.stranded()`. Measured on codex-cli 0.163."""
+
+
 def _refused(exc: Exception) -> dict[str, Any]:
     """Turn a backend exception into a result the model can act on rather than a protocol error.
 
@@ -279,6 +289,8 @@ async def join_channel(
             "Nothing arrives on its own here. Call check_inbox before acting on anything and again before ending "
             "your turn."
         )
+    if radio().stranded():
+        response["wake"] = STRANDED
     if not radio().delivers and (watch := radio().notices.url):
         # Only Claude Code can act on this today, through its Monitor tool; every other client ignores an extra
         # field. It is the one path that reaches a session doing nothing at all, since a hook needs the session to
@@ -466,6 +478,8 @@ async def dev_connections() -> dict[str, Any]:
     """
     open_connections = _radio.describe_all() if _radio else []
     answer: dict[str, Any] = {"connections": open_connections, "count": len(open_connections)}
+    if _radio and _radio.stranded():
+        answer["wake"] = STRANDED
     if _radio and (watch := _radio.notices.url):
         # `join_channel` says this once, and only to whoever called it. A program written in another language --
         # a supervisor, a watcher, anything not holding this session's tool results -- has no way back to it, and

@@ -613,6 +613,7 @@ class Backend:
         self._serving: str | None = _UNASKED
         self._posting: asyncio.Task | None = None
         self._door: tuple[str, str] | None = _UNASKED
+        self._codex: bool | str = _UNASKED
         # Ids a doorbell has already named. Pruned to what is still unread, so it never outgrows the inboxes.
         self._announced: set[str] = set()
         # Whether the client's hooks call into this process, which decides what a doorbell tells the model to do.
@@ -823,6 +824,12 @@ class Backend:
         if self._serving is _UNASKED:
             self._serving = wake.serving()
         return self._serving
+
+    def stranded(self) -> bool:
+        """A Codex session with no door: under Codex's app-server, but not one listening on a WebSocket."""
+        if self._codex is _UNASKED:
+            self._codex = wake.under_codex()
+        return bool(self._codex) and self.serving() is None and self.door() is None
 
     def door(self) -> tuple[str, str] | None:
         """The inbox socket of the Claude Code session running this server, looked up once. Exported at start."""
