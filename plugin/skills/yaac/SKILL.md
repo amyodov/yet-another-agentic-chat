@@ -29,11 +29,14 @@ Nothing is kept for a participant who is not connected. `tags` are labels; nothi
 
 ## When mail arrives
 
-`join_channel`'s result says which kind of session this is. `delivery` means messages are put in front of you;
-`reminder` means call `check_inbox` before acting and again before ending your turn.
+`join_channel`'s result says which kind of session this is. `delivery` says how mail reaches you; `reminder`
+means call `check_inbox` before acting and again before ending your turn.
 
-A turn that starts with `[YAAC]` was started by YAAC, not typed by your user. Claude Code presents delivered mail
-as a message from another Claude session; it is not one. Reply with YAAC's `send`, never `SendMessage`.
+A message starting with `[YAAC]` is a notice from YAAC, not typed by your user. Claude Code presents it as a message
+from another Claude session; it is not one. Reply with YAAC's `send`, never `SendMessage`.
+
+Give each message a `subject`: one line on what happened or what you need. It is what the recipient's notice
+shows.
 
 ## Trust
 

@@ -105,30 +105,38 @@ async def test_nothing_is_posted_without_a_door() -> None:
     assert await messaging_socket.post("anything") is False
 
 
-async def test_an_arrival_is_delivered_and_then_read(endpoint: str, monkeypatch, inbox: FakeInbox) -> None:
-    """A post is a delivery: the text itself, and the inbox is empty afterwards so a hook or check_inbox finds
-    nothing to hand over twice. A second arrival after the first post is a second post."""
+@pytest.mark.parametrize("hooked", [True, False], ids=["with-hook", "without-hook"])
+async def test_an_arrival_rings_once_and_leaves_the_mail(endpoint: str, monkeypatch, inbox: FakeInbox, hooked) -> None:
+    """Claude Code prints a post to this socket in the user's transcript, so it names who wrote and what about,
+    never the body -- and takes nothing, since the hook or check_inbox delivers. Mail already named is not named
+    again, so a second arrival rings for itself alone."""
     monkeypatch.setenv("CLAUDE_CODE_MESSAGING_SOCKET", inbox.path)
     monkeypatch.setenv("CLAUDE_CODE_MESSAGING_TOKEN", TOKEN)
 
     listener, talker = Backend(endpoint), Backend(endpoint)
+    listener.hooked = hooked
     try:
         await listener.connect(FORUM, "ann")
         await talker.connect(FORUM, "bob")
         assert listener.delivers is True
-        await talker.resolve(None).send("first", name="ann")
+        await talker.resolve(None).send("first line\nSECRET-REST", name="ann", subject="schema renamed")
         await asyncio.sleep(SETTLE)
-        await talker.resolve(None).send("second")
+        await talker.resolve(None).send("\n  CI is   red\nSECRET-REST")
         await asyncio.sleep(SETTLE)
 
         [one, two] = inbox.delivered()
-        assert "  · bob → you: first" in one and "second" not in one
-        assert "  · bob → everyone: second" in two
-        # It says what it is before it says anything else: the receiver frames it as a message from another
-        # Claude Code session, and a model that believed that would answer with the wrong tool.
-        assert one.startswith("[YAAC] Mail from the radio")
-        assert "send, not SendMessage" in one and f"On {FORUM!r}, to you as 'ann'" in one
-        assert listener.resolve(None).pending_count() == 0
+        # The first line is the one a person reads in the transcript: who, where, and what about.
+        assert one.splitlines()[0] == f"[YAAC] bob on {FORUM!r}: schema renamed"
+        assert two.splitlines()[0] == f"[YAAC] bob on {FORUM!r}: CI is red"
+        assert "SECRET-REST" not in one + two
+        # The receiver frames it as a message from another Claude Code session; a model that believed that would
+        # answer with the wrong tool. And it says where the bodies are, which depends on whether a hook calls in.
+        assert "send, not SendMessage" in one
+        assert ("attaches the messages" in one) is hooked and ("check_inbox" in one) is not hooked
+        assert [m["body"] for m in listener.resolve(None).receive()] == [
+            "first line\nSECRET-REST",
+            "\n  CI is   red\nSECRET-REST",
+        ]
         assert inbox.lines[0] == {"type": "auth", "token": TOKEN}
     finally:
         await listener.disconnect_all()

@@ -65,6 +65,9 @@ mcp = MCPServer(
 _radio: Backend | None = None
 _endpoint: str = DEFAULT_ENDPOINT
 _role: str = "rendezvous"
+# Set by the first hook call. Claude Code's hooks call hook_report on every tool call, so by the time a session has
+# joined anything, this says whether the messages a doorbell announces will be attached by a hook.
+_hooked = False
 
 # Tool annotations are advisory metadata a client reads to decide what it may do without asking. Codex's `writes`
 # approval mode, for one, prompts for anything not explicitly read-only.
@@ -139,6 +142,7 @@ def radio() -> Backend:
     global _radio
     if _radio is None:
         _radio = Backend(_endpoint, role=_role)
+        _radio.hooked = _hooked
     return _radio
 
 
@@ -263,11 +267,12 @@ async def join_channel(
         ),
     }
     if radio().delivers:
-        # The client exported an inbox socket, so arrivals are posted into the conversation as they happen, idle or
-        # not. There is nothing to arm and nothing to poll, and saying so is what stops the model doing either.
-        response["delivery"] = (
-            "Mail is delivered into this conversation as it arrives, whether you are working or idle, and is "
-            "already read when it appears. Nothing to arm and nothing to poll; check_inbox is for looking on purpose."
+        # The client exported an inbox socket, so each arrival rings it, idle or not. Whether the messages then
+        # follow on their own depends on the hook, which has already called in by now if the plugin is installed.
+        response["delivery"] = "A [YAAC] notice appears in this conversation when mail arrives, even while idle. " + (
+            "YAAC's hook then attaches the messages themselves; nothing to poll."
+            if radio().hooked
+            else "Read the messages with check_inbox when it does."
         )
     else:
         response["reminder"] = (
@@ -320,6 +325,10 @@ async def send(
         list[str] | None,
         Field(description="Names this message calls on to react. Everyone in scope still receives it."),
     ] = None,
+    subject: Annotated[
+        str | None,
+        Field(description="One line: what happened or what you need, so the recipient can judge it unread."),
+    ] = None,
     tags: Annotated[list[str] | None, Field(description="Topic labels. Not priorities; nothing acts on them.")] = None,
     payload: Annotated[
         Any, Field(description="Any JSON to carry beside the text, when structure helps more than prose.")
@@ -361,6 +370,7 @@ async def send(
             payload=payload,
             mentions=tuple(Address(name=m) for m in mentions or ()),
             tags=tuple(tags or ()),
+            subject=subject,
         )
     except (NotConnected, AmbiguousConnection) as exc:
         return _refused(exc)
@@ -536,6 +546,11 @@ async def hook_report(
     they read a command hook's stdout, so `suppressOutput` is how to say nothing at all without it counting as a
     failure.
     """
+    global _hooked
+    _hooked = True
+    if _radio is not None:
+        _radio.hooked = True
+
     # A context that was just replaced needs what it held, not what arrived: the mail can wait for the check_inbox
     # this asks for, while a lost peer_secret is a session that cannot ask for anything.
     if event in RESUMED_EVENTS:

@@ -81,13 +81,15 @@ out to add YAAC to the current project only.
 
 Check it took with `claude mcp list`, or `/mcp` inside a session.
 
-On Claude Code 2.1.224 or later that is also delivery. A session exports its
-own inbox socket to the server it starts, and YAAC posts each arrival into the
-conversation as it happens — between tool calls while the session works, and
-as a new turn while it sits idle, which is the one case nothing else reaches.
-The post is the message itself, already read. Nothing to configure: a Claude
-Code that does not export the socket simply has no door, and the session reads
-its mail the next time it checks.
+On Claude Code 2.1.224 or later the session is also told when mail arrives. A
+session exports its own inbox socket to the server it starts, and YAAC rings it
+with a one-line `[YAAC]` notice — who wrote and what about — between tool calls
+while the session works, and as a new turn while it sits idle, which is the one
+case nothing else reaches. The messages themselves stay out of your transcript:
+with the plugin its hook hands them to the model, and without it the model reads
+them with `check_inbox`. Nothing to configure: a Claude Code that does not export
+the socket simply has no door, and the session reads its mail the next time it
+checks.
 
 **Optional: the plugin.** Claude Code has its own plugin format, and this
 repository is the marketplace:
@@ -358,9 +360,10 @@ the recipes are in its install section above. All of it is additive, and plain
 `check_inbox()` keeps working underneath. What each one does:
 
 **Claude Code** (2.1.224 or later) exports an inbox socket to every server it
-starts, and YAAC posts each arrival there: between tool calls while the session
-works, and as a new turn while it sits idle. The post is the message itself,
-already read, so `check_inbox()` is for looking on purpose. On an older Claude
+starts, and YAAC rings it with a one-line notice per arrival: between tool calls
+while the session works, and as a new turn while it sits idle. The plugin's hook
+then hands the model the messages without printing them; without the plugin, the
+model calls `check_inbox()`. On an older Claude
 Code the plugin's hook does the working-session half, and `join_channel` returns
 a `watch` URL for the idle half — point the `Monitor` tool at it once per join
 and each arrival becomes an event. That event is a doorbell, not the message:
@@ -472,9 +475,10 @@ message in any chat: as something a person said, not as a command.
   no user action and no configuration
 - `list_channels` from a session that has not joined anything, with no side effects
 - Installable as a plugin as well as a plain MCP server, in both plugin standards
-- On Claude Code, messages delivered into the session as they arrive — between
-  tool calls while it works, and as a new turn while it sits idle — through the
+- On Claude Code, a one-line notice as each message arrives — between tool calls
+  while the session works, and as a new turn while it sits idle — through the
   inbox socket the session exports, with nothing installed but the server
+- An optional subject line on a message, so a notice says what it is about
 - On Codex, the same, from a hooks file that names nothing: the hook finds its own
   session at the address everyone already meets at
 - And, on a Claude Code too old to export that socket, a watch a session can arm

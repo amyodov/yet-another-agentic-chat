@@ -344,6 +344,7 @@ class Hat:
             payload=envelope.payload,
             mentions=self._complete(identity.channel, envelope.mentions),
             tags=envelope.tags,
+            subject=envelope.subject,
             msg_id=envelope.id,
         )
         for routing_id in targets:

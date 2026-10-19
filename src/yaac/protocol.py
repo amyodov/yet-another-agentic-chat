@@ -302,8 +302,10 @@ class Envelope:
     rather than names, which is exact where a name is ambiguous the moment it has been reused. `payload` stays
     opaque: the hat has no business in it.
 
-    `body` and `payload` come last, so `head -c` on a log shows the routing of every message however long its
-    contents.
+    `subject` is the sender's one line about what happened or what is needed, so a recipient can judge a message
+    without reading it. It comes before `body` because it is bounded in practice, and `body` and `payload` come
+    last, so `head -c` on a log shows the routing of every message however long its contents. An older hat drops
+    `subject` when it re-serializes, which is why `headline` falls back to the body.
     """
 
     id: str
@@ -313,6 +315,7 @@ class Envelope:
     op: str | None = None
     mentions: tuple[Address, ...] = ()
     tags: tuple[str, ...] = ()
+    subject: str | None = None
     body: str | None = None
     payload: Any = None
 
@@ -328,6 +331,8 @@ class Envelope:
             wire["mentions"] = [m.to_wire() for m in self.mentions]
         if self.tags:
             wire["tags"] = list(self.tags)
+        if self.subject is not None:
+            wire["subject"] = self.subject
         if self.body is not None:
             wire["body"] = self.body
         if self.payload is not None:
@@ -343,7 +348,7 @@ class Envelope:
                 raise ValueError(f"message {field_name} must be a string")
         if "to" not in value:
             raise ValueError("a message says who it is for, even when that is the hat")
-        for field_name in ("op", "body"):
+        for field_name in ("op", "subject", "body"):
             if field_name in value and not isinstance(value[field_name], str):
                 raise ValueError(f"message {field_name} must be a string")
         mentions = value.get("mentions", [])
@@ -360,6 +365,7 @@ class Envelope:
             op=value.get("op"),
             mentions=tuple(address for m in mentions if (address := Address.from_wire(m)) is not None),
             tags=tuple(tags),
+            subject=value.get("subject"),
             body=value.get("body"),
             payload=value.get("payload"),
         )
@@ -382,6 +388,7 @@ def message(
     payload: Any = None,
     mentions: tuple[Address, ...] = (),
     tags: tuple[str, ...] = (),
+    subject: str | None = None,
     frm: Scope | None = None,
     op: str | None = None,
     msg_id: str | None = None,
@@ -395,9 +402,25 @@ def message(
         op=op,
         mentions=mentions,
         tags=tags,
+        subject=subject,
         body=body,
         payload=payload,
     )
+
+
+HEADLINE_LIMIT = 80
+"""Longest headline. Long enough for a sentence about one change, short enough for one line of a transcript."""
+
+
+def headline(envelope: Envelope, limit: int = HEADLINE_LIMIT) -> str:
+    """One line saying what a message is about: its subject, else the first non-empty line of its body.
+
+    Derived on the receiving side only, because a peer may send anything and the hat never reads a body. Whitespace
+    is collapsed so a subject cannot spill a second line into a notice, and the cut is marked rather than silent.
+    """
+    text = envelope.subject or next((line for line in (envelope.body or "").splitlines() if line.strip()), "")
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 # Operator mail ----------------------------------------------------------

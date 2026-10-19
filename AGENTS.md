@@ -251,6 +251,11 @@ which is how three guesses at the shape vanished before the real one was read ou
 snippet; a top-level `from` is ignored, so the sender goes in the content. The token is optional on macOS and
 Linux and required on native Windows, where the door is a named pipe -- measured on macOS only.
 
+A post there is printed in the user's transcript as well as handed to the model, so since 0.6.1 it is a doorbell:
+one line naming sender and subject, with the bodies left in the inbox for the hook's `additionalContext`, which the
+model sees and the transcript does not. Reported from the field in October 2026, when 0.6.0's posts carried every
+body in full and filled the transcript with them.
+
 Two consequences. The suite, run from inside a Claude Code session, inherits those variables, and a `Backend`
 under test delivered a test message into the developer's own conversation; `conftest.py` scrubs both. And the
 registry the client keeps at `~/.claude/sessions/<pid>.json` -- `sessionId`, `name`, `cwd`, `status`,

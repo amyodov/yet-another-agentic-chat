@@ -267,6 +267,32 @@ def test_a_frame_that_is_not_an_object_is_rejected(frame: bytes) -> None:
         protocol.parse(frame)
 
 
+@pytest.mark.parametrize(
+    "subject,body,expected",
+    [
+        ("schema renamed", "hello\nthe field is recipient_group", "schema renamed"),
+        (None, "\n\n  first   real line \nsecond", "first real line"),
+        ("  two\nlines  ", "body", "two lines"),
+        (None, "x" * 200, "x" * 79 + "…"),
+        (None, None, ""),
+        ("", "fallback", "fallback"),
+    ],
+    ids=["subject", "first-line", "collapsed", "capped", "nothing", "empty-subject"],
+)
+def test_a_headline_is_the_subject_or_else_the_first_line(subject, body, expected: str) -> None:
+    """Derived by the recipient, never the hat, because an older hat drops `subject` and a peer may send anything.
+    One line always: a subject cannot spill a second one into a notice."""
+    message = protocol.message(Scope(channel="forum"), subject=subject, body=body)
+    assert protocol.headline(message) == expected
+
+
+def test_a_subject_survives_the_wire_and_sits_before_the_body() -> None:
+    sent = protocol.message(Scope(channel="forum"), subject="CI is red", body="x" * 5000)
+    encoded = protocol.dumps(sent.to_wire()).decode("utf-8")
+    assert protocol.Envelope.from_wire(protocol.parse(encoded.encode())).subject == "CI is red"
+    assert encoded.index('"subject"') < encoded.index('"body"')
+
+
 def test_the_version_leads_and_the_body_trails() -> None:
     """`head -c` on a log must show the routing of every message, however long the bodies are."""
     encoded = protocol.dumps(

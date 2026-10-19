@@ -38,6 +38,7 @@ carries it is who it is addressed to**, never how it is laid out:
 | `op` | string | Only on operator mail: which question or answer it is. |
 | `mentions` | array of address | Who is called on to react. Absent when nobody is. |
 | `tags` | array of string | Topics. Never priorities; nothing acts on them. |
+| `subject` | string | One line on what happened or what is needed, for a notice to show. Optional; a recipient falls back to the body's first line. |
 | `body` | string | Text, verbatim. Never parsed by YAAC. |
 | `payload` | any JSON | Structure, when a sentence is not enough. Always last. |
 

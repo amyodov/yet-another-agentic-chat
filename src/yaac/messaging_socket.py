@@ -16,15 +16,15 @@ always: optional on macOS and Linux, required on Windows, and the only thing tha
 exited or in a container where Claude Code is pid 1. The connection is opened only once the line is ready,
 because the receiver closes one that has not completed a line within 30 s.
 
-This is a postman rather than an alarm clock, unlike the Codex wake. The post carries the messages themselves,
-because text placed in the model's context is a delivery whatever it is called, and a doorbell here would cost a
-turn and then a `check_inbox` on top. The mail is taken from the inbox only once the post has gone through, so a
-door that is gone loses nothing; and a hook that fires afterwards finds nothing, which is what stops the same text
-arriving twice.
+What goes through it is a doorbell, never the mail. Claude Code prints a post to this socket in the user's
+transcript, so a post carrying the bodies filled it with every message in full -- reported from the field in
+October 2026. A doorbell names who wrote and what about, in one short first line, and leaves the inbox alone: the
+plugin's hook hands the bodies over as `additionalContext`, which reaches the model without being printed, and
+without the plugin `check_inbox` does. Reading stays a pull, as on every other client.
 
 Nothing is configured: a session started by a Claude Code new enough exports the variables, and one that is not
 has no door. Every failure is quiet -- a socket that is gone, a refused connection, a receiver that holds the
-message for approval -- and the mail stays in the inbox for the hook or the model to collect.
+post for approval -- and costs nothing, since the mail was never taken from the inbox.
 """
 
 import asyncio

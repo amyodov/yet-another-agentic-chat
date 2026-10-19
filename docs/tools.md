@@ -113,6 +113,7 @@ delivered to you, or collected with check_inbox.
 | `body` | string | yes | The message text. |
 | `name` | string | null | no | Recipient's name. Omit only to announce to everyone. |
 | `mentions` | array | null | no | Names this message calls on to react. Everyone in scope still receives it. |
+| `subject` | string | null | no | One line: what happened or what you need, so the recipient can judge it unread. |
 | `tags` | array | null | no | Topic labels. Not priorities; nothing acts on them. |
 | `payload` | object | no | Any JSON to carry beside the text, when structure helps more than prose. |
 | `connection_id` | string | null | no | Which connection to use. Omit unless this session holds more than one. |
