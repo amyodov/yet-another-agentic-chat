@@ -164,6 +164,29 @@ async def test_a_program_that_runs_once_is_answered_with_what_is_waiting(radios:
     assert answer["connections"][0]["connection_id"] == joined.connection_id
 
 
+@pytest.mark.parametrize(
+    "known,asked,answered,bound",
+    [
+        (None, "thread-b", True, "thread-b"),
+        ("thread-a", "thread-a", True, "thread-a"),
+        ("thread-a", "thread-b", False, "thread-a"),
+    ],
+    ids=["first-binds", "same-thread", "other-thread-refused"],
+)
+async def test_the_first_thread_named_is_the_one_woken(
+    radios: RadioFactory, known: str | None, asked: str, answered: bool, bound: str
+) -> None:
+    """A hook that reached this session by guesswork must not move its waking to another thread: that would wake
+    the wrong conversation for every message after. A hook naming a different thread is refused outright."""
+    listener = radios()
+    await listener.connect(FORUM, "ann")
+    listener.notices.thread = known
+
+    answer = await asyncio.to_thread(ask, listener.notices.url, thread=asked)
+    assert (answer is not None) is answered
+    assert listener.notices.thread == bound
+
+
 async def test_nothing_listens_until_there_is_something_to_hear(radios: RadioFactory) -> None:
     """Hard rule 2 in the new place it can be broken: a dormant server opens no socket, and the port goes back the
     moment the last membership does."""

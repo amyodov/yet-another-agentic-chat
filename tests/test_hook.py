@@ -312,9 +312,18 @@ def _stdin(payload: dict[str, Any], encoding: str = "cp1251"):
         ([], HERE, None),
     ],
     ids=[
-        "claude-and-websocket-codex", "claude-and-managed-daemon", "different-app-servers", "only-claude",
-        "only-foreign-server", "websocket-candidate-without-own-server", "ambiguous-websocket", "ambiguous-managed",
-        "other-cwd", "exact-client", "legacy-cwd", "empty-directory",
+        "claude-and-websocket-codex",
+        "claude-and-managed-daemon",
+        "different-app-servers",
+        "only-claude",
+        "only-foreign-server",
+        "websocket-candidate-without-own-server",
+        "ambiguous-websocket",
+        "ambiguous-managed",
+        "other-cwd",
+        "exact-client",
+        "legacy-cwd",
+        "empty-directory",
     ],
 )
 def test_a_codex_hook_selects_only_its_own_session(monkeypatch, sessions, serving, expected):

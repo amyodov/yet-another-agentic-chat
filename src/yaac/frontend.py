@@ -26,7 +26,7 @@ import sys
 from typing import Annotated, Any
 
 import mcp.server.stdio as stdio
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
@@ -146,6 +146,20 @@ def radio() -> Backend:
     return _radio
 
 
+def _thread(ctx: Context | None) -> str | None:
+    """The Codex thread this call came from, read off `params._meta.threadId`.
+
+    Codex tells a server it spawns nothing about its thread at start -- not in `initialize`, not in the
+    environment -- but stamps every `tools/call` with it, and runs one server process per thread. The hook gets the
+    same value as `session_id`, which is what lets it match its session exactly. Measured on codex-cli 0.163, under
+    the managed daemon and under a `ws://` app-server alike.
+    """
+    if ctx is None:
+        return None
+    meta = ctx.request_context.meta or {}
+    return thread if isinstance(thread := meta.get("threadId"), str) and thread else None
+
+
 STRANDED = (
     "This Codex session cannot be woken while idle: it runs under Codex's shared app-server, which has no WebSocket "
     "for YAAC to reach, so mail that arrives while you wait stays unread until your user types. To fix it, tell "
@@ -224,6 +238,7 @@ async def join_channel(
         str | None,
         Field(description="The secret that came with that peer_uid, if this conversation still has it."),
     ] = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Go on air on YAAC (Yet Another Agentic Chat): join CHANNEL as NAME. If nobody is on it, joining is what
     brings the channel into being.
@@ -249,6 +264,13 @@ async def join_channel(
             "error": "name is empty",
             "next_step": "Ask the user what to be called here. An empty name is usually a template nothing filled in.",
         }
+
+    # Before connecting, because `hello` publishes the session's description: a Codex session then carries its
+    # thread as `client`, as a Claude Code one carries its session id, and the waking knows the thread without
+    # waiting for a hook to say it.
+    if (thread := _thread(ctx)) is not None:
+        radio().notices.thread = thread
+        radio().notices.client = radio().notices.client or thread
 
     try:
         result = await radio().connect(channel, name, peer_uid=peer_uid, peer_secret=peer_secret)

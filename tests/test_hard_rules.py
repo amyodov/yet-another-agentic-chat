@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from yaac import frontend
+from yaac import frontend, hook
 from yaac.backend import (
     LOG_QUEUE,
     NOT_JOINED,
@@ -29,6 +29,7 @@ from yaac.backend import (
     chosen_rendezvous,
     configure_logging,
 )
+from yaac.directory import directory
 
 REPO = Path(__file__).resolve().parent.parent
 SERVER = [sys.executable, "-c", "from yaac.frontend import main; main()"]
@@ -352,6 +353,35 @@ async def test_check_inbox_will_not_read_an_inbox_it_was_not_given(
     # that lost its id can recover rather than guess.
     if arguments:
         assert "open_connections" in body
+
+
+@pytest.mark.parametrize(
+    "meta,client", [({"threadId": "codex-thread"}, "codex-thread"), ({}, None)], ids=["codex", "no-thread"]
+)
+async def test_a_codex_session_publishes_the_thread_its_hook_is_told(
+    endpoint: str, monkeypatch, meta: dict, client: str | None
+) -> None:
+    """Codex stamps every tool call with `_meta.threadId` and gives its hooks the same value as `session_id`, so a
+    session that publishes it is found by its hook exactly -- whatever else runs in its working directory."""
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    published: list[list[dict]] = []
+
+    def ask_the_directory(_answers: dict) -> dict:
+        published.append(directory(endpoint))
+        return {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
+
+    join = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": "join_channel", "arguments": {"channel": "forum", "name": "ann"}, "_meta": meta},
+    }
+    await run_server(endpoint, [*HANDSHAKE, join, ask_the_directory])
+
+    [[session]] = published
+    assert session.get("client") == client
+    found = hook.mine([session], {"session_id": "codex-thread", "cwd": "/somewhere-else"})
+    assert (found or {}).get("pid") == (session["pid"] if client else None)
 
 
 @pytest.mark.parametrize("joins", [True, False], ids=["wearing-the-hat", "never-joined"])

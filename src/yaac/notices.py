@@ -48,7 +48,8 @@ over-long one degrades to the part that is always true instead of being truncate
 
 
 def client_session() -> str | None:
-    """What this session's client calls it, if the client says. Claude Code does; Codex tells only its hooks."""
+    """What this session's client calls it, if its environment says. Claude Code's does; Codex says it on each tool
+    call instead, which `join_channel` reads."""
     for variable in CLIENT_ENV:
         if value := os.environ.get(variable):
             return value
@@ -105,8 +106,8 @@ class Notices:
         self.token = protocol.new_ulid()
         self.port: int | None = None
         self.snapshot: Callable[[], list[dict[str, Any]]] = list
-        # Which Codex thread this session is, learned from its hook rather than from the environment: Codex tells
-        # a server it spawns nothing about the thread it serves, but it tells every hook, on stdin, every time.
+        # Which Codex thread this session is. Codex puts it on every tool call rather than in the environment, so
+        # `join_channel` sets it; a hook that asks with `?thread=` says the same thing again.
         self.thread: str | None = None
         self._server: asyncio.Server | None = None
         self._watchers: set[asyncio.StreamWriter] = set()
@@ -169,8 +170,14 @@ class Notices:
         head = request.decode("latin-1").split("\r\n")
         target = head[0].split(" ")[1] if " " in head[0] else "/"
         target, _, query = target.partition("?")
-        if query.startswith("thread=") and (thread := query[len("thread=") :]):
-            self.thread = thread
+        asked = query[len("thread=") :] if query.startswith("thread=") else ""
+        # A hook names its thread, and the first name sticks. A hook that picked this session by guesswork --
+        # same directory, same app-server, no published thread -- must not move the waking to its own thread, and
+        # one that names a different thread from the one this session knows is answering for somebody else.
+        if asked and self.thread is not None and asked != self.thread:
+            target = "/"
+        elif asked:
+            self.thread = asked
         headers = {}
         for line in head[1:]:
             if ": " in line:
