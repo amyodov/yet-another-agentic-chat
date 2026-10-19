@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from yaac import frontend, protocol
+from yaac import frontend, processes, protocol
 from yaac import hook as yaac_hook
 from yaac.backend import Backend, heading, narrate
 from yaac.protocol import Address, Scope
@@ -26,6 +26,14 @@ OTHER = "standup"
 SETTLE = 0.4  # generous for loopback TCP, short enough to keep the suite quick
 
 RadioFactory = Callable[[], Backend]
+
+CWD = "/work"
+HERE = "ws://127.0.0.1:4500"
+ELSEWHERE = "ws://127.0.0.1:4600"
+CLAUDE = {"pid": 21, "cwd": CWD, "client": "claude-thread"}
+CODEX = {"pid": 22, "cwd": CWD, "serving": HERE}
+MANAGED_CODEX = {"pid": 22, "cwd": CWD}
+OTHER_CODEX = {"pid": 23, "cwd": CWD, "serving": ELSEWHERE}
 
 
 def aloud(sender: str, body: str, **kwargs) -> dict[str, Any]:
@@ -285,6 +293,36 @@ def _stdin(payload: dict[str, Any], encoding: str = "cp1251"):
     """A hook payload as a client actually hands it over: UTF-8 bytes, under a text layer decoding with whatever
     the console chose. `cp1251` is the default on a Russian Windows, and is the case Vadim met."""
     return io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode("utf-8")), encoding=encoding)
+
+
+@pytest.mark.parametrize(
+    "sessions,serving,expected",
+    [
+        ([CLAUDE, CODEX], HERE, CODEX),
+        ([CLAUDE, MANAGED_CODEX], None, MANAGED_CODEX),
+        ([CODEX, OTHER_CODEX], HERE, CODEX),
+        ([CLAUDE], HERE, None),
+        ([OTHER_CODEX], HERE, None),
+        ([CODEX], None, None),
+        ([CODEX, {**CODEX, "pid": 24}], HERE, None),
+        ([MANAGED_CODEX, {**MANAGED_CODEX, "pid": 24}], None, None),
+        ([{**CODEX, "cwd": "/other"}], HERE, None),
+        ([{**CODEX, "client": "codex-thread"}, CLAUDE], HERE, {**CODEX, "client": "codex-thread"}),
+        ([MANAGED_CODEX], None, MANAGED_CODEX),
+        ([], HERE, None),
+    ],
+    ids=[
+        "claude-and-websocket-codex", "claude-and-managed-daemon", "different-app-servers", "only-claude",
+        "only-foreign-server", "websocket-candidate-without-own-server", "ambiguous-websocket", "ambiguous-managed",
+        "other-cwd", "exact-client", "legacy-cwd", "empty-directory",
+    ],
+)
+def test_a_codex_hook_selects_only_its_own_session(monkeypatch, sessions, serving, expected):
+    # The hook and MCP server are siblings under app-server 10, reparented to launchd (pid 1).
+    monkeypatch.setattr(processes, "ancestry", lambda: [30, 10, 1])
+    command = f"codex app-server --listen {serving or 'unix:// --managed-daemon'}"
+    monkeypatch.setattr(processes, "command_lines", lambda: {10: command})
+    assert yaac_hook.mine(sessions, {"session_id": "codex-thread", "cwd": CWD}) == expected
 
 
 @pytest.mark.parametrize(

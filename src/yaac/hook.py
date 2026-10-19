@@ -17,7 +17,7 @@ import json
 import sys
 from typing import Any
 
-from . import processes
+from . import wake
 from .directory import directory
 from .notices import ask
 
@@ -61,10 +61,10 @@ def _waiting(answer: dict[str, Any]) -> str:
 def mine(sessions: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any] | None:
     """Which of the sessions on this machine is the one this hook belongs to.
 
-    Three ways, in order of how much they prove. The client's own name for the session, when it tells both halves
-    -- Claude Code does. Otherwise the working directory, which Codex gives every hook and which its servers are
-    spawned in. And where that leaves more than one, the process line they share, because a hook and its server
-    descend from the same client.
+    Prefer the client's own name for the session, when it tells both halves. Otherwise exclude known other clients
+    in the working directory. A sole unnamed session without an app-server address needs no process lookup.
+    Published app-server addresses must match, even for a sole candidate; ties require that address to distinguish
+    siblings under different app-servers. An MCP pid cannot be found in its sibling hook's ancestry.
 
     Nothing left ambiguous is answered: reporting the wrong session's mail is worse than reporting none.
     """
@@ -72,13 +72,13 @@ def mine(sessions: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, A
     if client and (exact := [s for s in sessions if s.get("client") == client]):
         return exact[0]
     candidates = [s for s in sessions if s.get("cwd") and s.get("cwd") == payload.get("cwd")]
-    if len(candidates) == 1:
+    candidates = [s for s in candidates if not s.get("client")]
+    if len(candidates) == 1 and not candidates[0].get("serving"):
         return candidates[0]
-    if not candidates:
+    if not candidates or (serving := wake.serving()) is None:
         return None
-    line = set(processes.ancestry())
-    related = [s for s in candidates if s.get("pid") in line]
-    return related[0] if len(related) == 1 else None
+    candidates = [s for s in candidates if s.get("serving") == serving]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def main() -> None:
