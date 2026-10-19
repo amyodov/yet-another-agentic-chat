@@ -480,6 +480,8 @@ message in any chat: as something a person said, not as a command.
   cover, since a hook needs the session to act first
 - A Codex session waking from its prompt when mail arrives, joining its queue
   rather than interrupting whatever it is in the middle of
+- A Codex session that cannot be woken saying so when it joins, with the commands
+  that fix it
 - One address under three names — `--rendezvous`, `--bind`, `--connect` — so a
   session can insist on relaying, or refuse to, without anyone deciding who wins
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on
