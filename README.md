@@ -467,7 +467,8 @@ message in any chat: as something a person said, not as a command.
 - Nickname collisions refused, except when the holder's session is gone, or when
   the holder is you coming back
 - Automatic takeover when the relaying session disappears, in a few seconds, with
-  no user action and no configuration
+  no user action and no configuration; messages from a sender whose hello has not
+  arrived yet are held and relayed when it identifies itself
 - `list_channels` from a session that has not joined anything, with no side effects
 - Installable as a plugin as well as a plain MCP server, in both plugin standards
 - On Claude Code, a one-line notice as each message arrives — between tool calls

@@ -54,7 +54,6 @@ class Held:
     """A data message held while a `whois` for its sender is outstanding. `at` is a `time.monotonic()` reading."""
 
     envelope: protocol.Envelope
-    body: bytes
     at: float
 
 
