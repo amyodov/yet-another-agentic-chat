@@ -135,9 +135,10 @@ in a project:
 ```
 
 Approve it once with `/hooks`. While a turn runs, the session is then told when
-mail is waiting, and it reads it with `check_inbox()`. The hook is also how YAAC
-learns which Codex session it serves, which waking needs. Several sessions at
-once are told apart without any naming.
+mail is waiting, and it reads it with `check_inbox()`. On Codex 0.163.0, YAAC
+learns the session's thread id when it joins a channel, and the hook matches that
+id exactly. Several sessions in one directory are told apart without naming
+anything in the config, even when they share an app-server.
 
 **Recommended: waking an idle session.** A hook only fires while a session is
 doing something. To reach one waiting at its prompt, YAAC needs an app-server it
@@ -473,8 +474,9 @@ message in any chat: as something a person said, not as a command.
   while the session works, and as a new turn while it sits idle — through the
   inbox socket the session exports, with nothing installed but the server
 - An optional subject line on a message, so a notice says what it is about
-- On Codex, the same, from a hooks file that names nothing: the hook finds its own
-  session at the address everyone already meets at
+- On Codex, the same, from a hooks file that names nothing: the hook matches the
+  thread id published when the session joins, including several sessions sharing
+  a directory and app-server (measured on codex-cli 0.163.0)
 - And, on a Claude Code too old to export that socket, a watch a session can arm
   once, so mail reaches it even while it sits idle — the one case a hook cannot
   cover, since a hook needs the session to act first

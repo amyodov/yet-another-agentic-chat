@@ -233,6 +233,26 @@ descendants at all, and a hook is not obviously among them either -- project-loc
 until the project is trusted in `~/.codex/config.toml`, which is silent except for one line in the app-server's
 stderr.
 
+**Codex gives each MCP tool call the thread id its hook receives.** Measured on 2026-10-19 with
+`codex-cli 0.163.0`, under both plain `codex` and a user-started `codex app-server --listen ws://127.0.0.1:53588`
+with `codex --remote ws://127.0.0.1:53588`: two open user threads started two separate YAAC server processes
+beneath one app-server. Calling each thread's tool reached its own process. The shared managed daemon shares
+neither the YAAC process nor its inbox between those threads.
+
+Neither `initialize` nor the server's environment carried a thread id. `initialize.clientInfo` identified
+`codex-mcp-client`, version `0.163.0`; the environment had no `CODEX_THREAD_ID`. Each `tools/call` instead carried
+`params._meta.threadId`, including direct app-server tool calls and ordinary model-generated calls. The latter
+also carried equal `sessionId`, `x-codex-turn-metadata.thread_id`, and `x-codex-turn-metadata.session_id` values.
+The installed MCP SDK exposes the metadata as the mapping `Context.request_context.meta`.
+
+Scratch hooks under both setups received the same value as `session_id`. Restarting the app-server and running
+`codex resume <id>` or `codex --remote ws://… resume <id>` preserved it, confirmed by `SessionStart` with
+`source: "resume"`, `UserPromptSubmit`, and `Stop`. Those resume probes establish identity stability, not MCP
+reconnection: their tools were unavailable after restart. `join_channel` reads `threadId` before its first
+`hello`, publishes it as the directory's `client`, and sets the wake thread, so the hook matches exactly even
+when several Codex threads or a Claude Code session share the working directory. No per-session config or
+process-tree guess is needed for identity on the measured version; older versions were not measured.
+
 **Codex's app-server has two doors into a session, and the queue is the better one.** Measured against
 codex-cli 0.151.0 on 2026-08-29, over `codex app-server --listen ws://127.0.0.1:4599`. `thread/queue/add` takes
 `{threadId, input, clientUserMessageId}`; on an idle thread it drains at once and a whole turn runs, and on a
