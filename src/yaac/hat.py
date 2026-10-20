@@ -21,7 +21,6 @@ libzmq built without draft support, so ``setsockopt`` rejects it with ``EINVAL``
 ``whois`` covers the remaining case: a data message from a routing id absent from the table.
 """
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -83,28 +82,14 @@ class Hat:
         Returns False and evicts it when the ROUTER reports the peer unreachable. This is the only place a
         departure is detected, since `ROUTER_NOTIFY` disconnect events are unavailable.
         """
+        # asyncio sockets turn even immediate NOBLOCK errors into Future exceptions. The relay needs the
+        # result now to bounce a directed message or reclaim a departed peer's name. A synchronous shadow
+        # shares the libzmq socket without taking ownership; never close it separately from the async router.
         try:
-            sending = self.router.send_multipart([routing_id, protocol.dumps(message.to_wire())], zmq.NOBLOCK)
+            zmq.Socket.shadow(self.router).send_multipart([routing_id, protocol.dumps(message.to_wire())], zmq.NOBLOCK)
         except zmq.ZMQError as exc:
             return self._unreachable(routing_id, exc)
-
-        # On a `zmq.asyncio` socket the send is a future, and `EHOSTUNREACH` for a peer that has gone arrives
-        # *after* this returns -- so the `except` above never sees it. Left alone it escapes into the event loop
-        # as an unhandled error, and, worse, the eviction never happens: this is the only place a departure is
-        # detected, which is what the whole "no heartbeat, no TTL" design rests on. A name whose holder had
-        # quietly gone therefore stayed taken, which is exactly what a user hit.
-        if isinstance(sending, asyncio.Future):
-            sending.add_done_callback(lambda done: self._sent(routing_id, done))
         return True
-
-    def _sent(self, routing_id: bytes, done: asyncio.Future) -> None:
-        """What became of a send that finished after we stopped looking."""
-        if done.cancelled():
-            return
-        if isinstance(exc := done.exception(), zmq.ZMQError):
-            self._unreachable(routing_id, exc)
-        elif exc is not None:
-            logger.warning("sending to %r failed: %r", routing_id, exc)
 
     def _unreachable(self, routing_id: bytes, exc: zmq.ZMQError) -> bool:
         """Evict a peer the ROUTER could not reach. Anything else is not ours to swallow."""

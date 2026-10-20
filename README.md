@@ -463,7 +463,8 @@ message in any chat: as something a person said, not as a command.
   handed back what it held, and on any client rejoining the same channel under
   the same name returns it
 - Channel creation reported, so a mistyped channel name is caught immediately
-- Bounces for messages that could not be delivered
+- Bounces for messages that could not be delivered, including a recipient whose
+  connection disappeared before the hat noticed
 - Nickname collisions refused, except when the holder's session is gone, or when
   the holder is you coming back
 - Automatic takeover when the relaying session disappears, in a few seconds, with
