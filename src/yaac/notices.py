@@ -171,12 +171,13 @@ class Notices:
         target = head[0].split(" ")[1] if " " in head[0] else "/"
         target, _, query = target.partition("?")
         asked = query[len("thread=") :] if query.startswith("thread=") else ""
-        # A hook names its thread, and the first name sticks. A hook that picked this session by guesswork --
-        # same directory, same app-server, no published thread -- must not move the waking to its own thread, and
-        # one that names a different thread from the one this session knows is answering for somebody else.
-        if asked and self.thread is not None and asked != self.thread:
-            target = "/"
-        elif asked:
+        # Reject a stale token or a foreign thread before changing the wake target. A rejected request must not
+        # claim an unbound session and prevent the legitimate hook from registering it later.
+        if target.lstrip("/") != self.path or (asked and self.thread is not None and asked != self.thread):
+            writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            await self._drain_and_close(writer)
+            return
+        if asked:
             self.thread = asked
         headers = {}
         for line in head[1:]:
@@ -184,10 +185,7 @@ class Notices:
                 field, _, value = line.partition(": ")
                 headers[field.lower()] = value
 
-        if target.lstrip("/") != self.path:
-            writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            await self._drain_and_close(writer)
-        elif "websocket" in headers.get("upgrade", "").lower():
+        if "websocket" in headers.get("upgrade", "").lower():
             await self._stream(reader, writer, headers.get("sec-websocket-key", ""))
         else:
             await self._answer_once(writer)

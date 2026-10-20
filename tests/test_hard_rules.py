@@ -364,6 +364,7 @@ async def test_a_codex_session_publishes_the_thread_its_hook_is_told(
     """Codex stamps every tool call with `_meta.threadId` and gives its hooks the same value as `session_id`, so a
     session that publishes it is found by its hook exactly -- whatever else runs in its working directory."""
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     published: list[list[dict]] = []
 
     def ask_the_directory(_answers: dict) -> dict:

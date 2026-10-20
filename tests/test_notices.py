@@ -165,16 +165,17 @@ async def test_a_program_that_runs_once_is_answered_with_what_is_waiting(radios:
 
 
 @pytest.mark.parametrize(
-    "known,asked,answered,bound",
+    "known,asked,valid_path,answered,bound",
     [
-        (None, "thread-b", True, "thread-b"),
-        ("thread-a", "thread-a", True, "thread-a"),
-        ("thread-a", "thread-b", False, "thread-a"),
+        (None, "thread-b", True, True, "thread-b"),
+        ("thread-a", "thread-a", True, True, "thread-a"),
+        ("thread-a", "thread-b", True, False, "thread-a"),
+        (None, "thread-b", False, False, None),
     ],
-    ids=["first-binds", "same-thread", "other-thread-refused"],
+    ids=["first-binds", "same-thread", "other-thread-refused", "wrong-path-cannot-bind"],
 )
 async def test_the_first_thread_named_is_the_one_woken(
-    radios: RadioFactory, known: str | None, asked: str, answered: bool, bound: str
+    radios: RadioFactory, known: str | None, asked: str, valid_path: bool, answered: bool, bound: str | None
 ) -> None:
     """A hook that reached this session by guesswork must not move its waking to another thread: that would wake
     the wrong conversation for every message after. A hook naming a different thread is refused outright."""
@@ -182,9 +183,15 @@ async def test_the_first_thread_named_is_the_one_woken(
     await listener.connect(FORUM, "ann")
     listener.notices.thread = known
 
-    answer = await asyncio.to_thread(ask, listener.notices.url, thread=asked)
+    url = listener.notices.url if valid_path else listener.notices.url + "-wrong"
+    answer = await asyncio.to_thread(ask, url, thread=asked)
     assert (answer is not None) is answered
     assert listener.notices.thread == bound
+    # A rejected URL must leave the legitimate hook free to bind the session.
+    if not valid_path:
+        accepted = await asyncio.to_thread(ask, listener.notices.url, thread="thread-a")
+        assert accepted["session"] == listener.notices.client
+        assert listener.notices.thread == "thread-a"
 
 
 async def test_nothing_listens_until_there_is_something_to_hear(radios: RadioFactory) -> None:
