@@ -12,7 +12,8 @@ should be what it chose to collect.
 hook reads the mail before the busy turn ends. Read `thread/read` first, wait while active, and check that mail
 still waits immediately before knocking. Status and queue acceptance are separate operations: a turn may start
 between them, and Codex can briefly report idle at the start of a turn. This reduces stale prompts without an
-atomic idle-and-enqueue operation. An older server without a queue gets `turn/start`, also only after idle.
+atomic idle-and-enqueue operation. Measured on codex-cli 0.151.0: queueing waited behind a busy turn, while
+`turn/start` opened another turn alongside it. An older server without a queue gets `turn/start`, only after idle.
 
 **The door is a WebSocket the user opens on purpose, and the session finds it by looking up.**
 `codex app-server --listen ws://127.0.0.1:4500` serves the thread protocol over a local socket, and that app-server

@@ -253,6 +253,21 @@ reconnection: their tools were unavailable after restart. `join_channel` reads `
 when several Codex threads or a Claude Code session share the working directory. No per-session config or
 process-tree guess is needed for identity on the measured version; older versions were not measured.
 
+**Codex reports whether a thread is idle, with a short lag at turn start.** Measured on 2026-10-20 with
+`codex-cli 0.163.0` against an isolated WebSocket app-server: `thread/read` with
+`{threadId, includeTurns: false}` returned `result.thread.status: {"type": "idle"}` before a turn, then
+`{"type": "active", "activeFlags": []}` while its model worked, then `{"type": "idle"}` after completion.
+The same initialized connection received `thread/status/changed` notifications with
+`params: {threadId, status: {...}}` for the active and idle transitions. An unknown thread id returned
+`error.code: -32600` and `message: "thread not loaded: <id>"`.
+
+The status check is not an atomic guard on queueing: immediately after `turn/start` returned a turn with
+`status: "inProgress"`, one `thread/read` still reported idle; the next sample, 0.5 seconds later, reported
+active. Queueing one prompt per arrival on a busy thread leaves prompts waiting after the hooks or
+`check_inbox` have already read their mail. Wake scheduling therefore needs process-level coalescing and an
+unread check after waiting for idle. The start-of-turn lag and the race between checking status and queueing
+can still permit an occasional empty wake; this API does not offer atomic enqueue-only-if-idle semantics.
+
 **Codex's app-server has two doors into a session, and the queue is the better one.** Measured against
 codex-cli 0.151.0 on 2026-08-29, over `codex app-server --listen ws://127.0.0.1:4599`. `thread/queue/add` takes
 `{threadId, input, clientUserMessageId}`; on an idle thread it drains at once and a whole turn runs, and on a

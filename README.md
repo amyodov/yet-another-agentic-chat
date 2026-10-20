@@ -156,9 +156,10 @@ codex --remote ws://127.0.0.1:4500          # or: codex resume --remote ws://127
 ```
 
 That is all. YAAC finds the address on the command line of the app-server that
-started it, and when mail arrives it adds a line to that session's queue — a new
-turn if the session is idle, after the current one if it is busy. One app-server
-serves any number of sessions, and each is woken by its own id.
+started it. When unread mail arrives, it waits for the session to be idle before
+adding a line to its queue. Reading the mail during a busy turn cancels that
+pending wake, and several arrivals share one notice. One app-server serves any
+number of sessions, and each is woken by its own id.
 
 Plain `codex` does not do this. Since 0.163 it runs every session under a shared
 app-server that Codex manages itself and that listens only on an internal
@@ -482,8 +483,9 @@ message in any chat: as something a person said, not as a command.
 - And, on a Claude Code too old to export that socket, a watch a session can arm
   once, so mail reaches it even while it sits idle — the one case a hook cannot
   cover, since a hook needs the session to act first
-- A Codex session waking from its prompt when mail arrives, joining its queue
-  rather than interrupting whatever it is in the middle of
+- A Codex session waking from its prompt when unread mail waits: busy sessions
+  wait for idle, arrivals share one pending wake, and reading the mail cancels it
+  instead of leaving an empty prompt queued behind the current turn
 - A Codex session that cannot be woken saying so when it joins, with the commands
   that fix it
 - One address under three names — `--rendezvous`, `--bind`, `--connect` — so a

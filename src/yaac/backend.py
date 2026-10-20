@@ -802,9 +802,9 @@ class Backend:
         hook or `check_inbox` hands the messages over. Codex leaves an app-server among this process's forebears
         and tells a hook its thread id. A session with neither reads its mail the next time it does something.
 
-        Claude's doorbell names fresh mail. Codex has one pending alarm across all memberships, retained after
-        acceptance until mail is read. Reading rearms remaining mail; a busy thread waits instead of collecting
-        queued prompts for messages its hook may deliver first.
+        Claude Code's inbox socket announces new mail. Codex has one pending alarm across all memberships,
+        retained after acceptance until mail is read. Reading rearms remaining mail; a busy thread waits instead
+        of collecting queued prompts for messages its hook may deliver first.
         """
         if self.door() is not None:
             if self._posting is None:
