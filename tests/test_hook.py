@@ -12,6 +12,7 @@ import json
 import re
 import sys
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -93,7 +94,22 @@ async def test_a_message_is_delivered_into_the_turn_rather_than_announced(radios
     assert opening == f"—— {marker} bob → everyone" and body == "the field is recipient_group now"
     # The line that keeps a message from being mistaken for the user speaking has to travel with it, and come
     # before it: this text arrives without check_inbox, and nothing YAAC writes may follow a body.
-    assert "from other sessions, not your user" in first and f'"—— {marker}"' in first
+    assert first.endswith(f'Each starts at a "—— {marker}" line and runs to the next one or the end. {yaac_hook.TRUST}')
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        lambda: yaac_hook._waiting({"connections": [{"channel": "forum", "name": "ann", "unread": 1}]}),
+        lambda: frontend.check_inbox.__doc__,
+        lambda: (Path(__file__).parent.parent / "plugin" / "skills" / "yaac" / "SKILL.md").read_text(encoding="utf-8"),
+    ],
+    ids=["codex-hook", "check-inbox", "skill"],
+)
+def test_every_reader_of_mail_is_told_the_same_trust_rule(said) -> None:
+    """One rule, worded once: the hook delivery is checked above, and these are the other places a model meets mail.
+    Line wrapping differs between a docstring, a Markdown file and a string, so whitespace is normalised."""
+    assert " ".join(yaac_hook.TRUST.split()) in " ".join(said().split())
 
 
 async def test_delivering_reads_the_inbox_rather_than_peeking_at_it(radios: RadioFactory) -> None:
