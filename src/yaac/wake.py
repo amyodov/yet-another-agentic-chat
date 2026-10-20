@@ -8,13 +8,11 @@ So this is an alarm clock rather than a postman. It says that mail is waiting an
 reading, which is the division the notice socket already makes, for the same reason: what a session receives
 should be what it chose to collect.
 
-**It knocks with `thread/queue/add`, and only falls back to `turn/start`.** Measured against codex-cli 0.151.0:
-on an idle thread the queue drains at once and a whole turn runs, so it wakes exactly as `turn/start` does; on a
-thread that is already working it takes its place in line, where `turn/start` instead opens a second turn
-alongside the first. Waking a session that is busy is the case this exists for, so the door that waits is the
-right one. It costs two things -- `capabilities.experimentalApi` in `initialize`, without which the server
-answers `-32600`, and a `clientUserMessageId`, which it echoes back and nothing here reads. A server too old for
-it says `unknown variant 'thread/queue/add'`, and that is what the fallback is for.
+**It waits for an idle thread before knocking with `thread/queue/add`.** A queued prompt survives even if a
+hook reads the mail before the busy turn ends. Read `thread/read` first, wait while active, and check that mail
+still waits immediately before knocking. Status and queue acceptance are separate operations: a turn may start
+between them, and Codex can briefly report idle at the start of a turn. This reduces stale prompts without an
+atomic idle-and-enqueue operation. An older server without a queue gets `turn/start`, also only after idle.
 
 **The door is a WebSocket the user opens on purpose, and the session finds it by looking up.**
 `codex app-server --listen ws://127.0.0.1:4500` serves the thread protocol over a local socket, and that app-server
@@ -41,6 +39,7 @@ import logging
 import os
 import struct
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -50,6 +49,8 @@ from . import processes
 logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 15.0
+POLL_SECONDS = 1.0
+MAX_POLL_SECONDS = 10.0
 HANDSHAKE_KEY = base64.b64encode(b"yaac------------").decode("ascii")
 """Any 16 bytes; the server hashes it back and nothing here checks the answer. A client that verified it would be
 guarding against a server that cannot help it anyway."""
@@ -181,12 +182,20 @@ def _turn(request_id: int, thread: str, text: str) -> dict[str, Any]:
     }
 
 
-async def wake(thread: str, text: str, url: str | None = None, timeout: float = TIMEOUT_SECONDS) -> bool:
+async def wake(
+    thread: str,
+    text: str,
+    url: str | None = None,
+    timeout: float = TIMEOUT_SECONDS,
+    *,
+    unread: Callable[[], bool] = lambda: True,
+) -> bool:
     """Put `text` in front of `thread` as if the user had typed it. True when the app-server accepted it.
 
     Every failure is quiet and false: nothing listening on that URL, no such thread, a server that refuses. The
     mail is in the inbox either way, and a session that cannot be woken is exactly a session that reads its mail
-    the next time it does something.
+    the next time it does something. Active threads wait with bounded I/O and polling that backs off to ten
+    seconds; cancel the task when its inbox drains or the owning session closes.
     """
     if (endpoint := url or serving()) is None:
         return False
@@ -205,7 +214,7 @@ async def wake(thread: str, text: str, url: str | None = None, timeout: float = 
             f"Upgrade: websocket\r\nConnection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {HANDSHAKE_KEY}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode()
         )
-        await writer.drain()
+        await asyncio.wait_for(writer.drain(), timeout=timeout)
         handshake = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
         if b"101" not in handshake.split(b"\r\n")[0]:
             logger.info("%s did not accept a websocket: %s", endpoint, handshake.split(b"\r\n")[0])
@@ -227,27 +236,65 @@ async def wake(thread: str, text: str, url: str | None = None, timeout: float = 
                 )
             )
         )
-        writer.write(_frame(json.dumps(_queue(2, thread, text))))
-        await writer.drain()
+        await asyncio.wait_for(writer.drain(), timeout=timeout)
 
-        if await asyncio.wait_for(_answer(reader, 1), timeout=timeout) is None:
-            logger.info("%s never finished the handshake; leaving %s asleep", endpoint, thread)
+        identified = await asyncio.wait_for(_answer(reader, 1), timeout=timeout)
+        if identified is None or "error" in identified or "result" not in identified:
             return False
-        knocked = await asyncio.wait_for(_answer(reader, 2), timeout=timeout)
+
+        interval = POLL_SECONDS
+        request_id = 2
+        while unread():
+            writer.write(
+                _frame(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "method": "thread/read",
+                            "params": {"threadId": thread, "includeTurns": False},
+                        }
+                    )
+                )
+            )
+            await asyncio.wait_for(writer.drain(), timeout=timeout)
+            status = await asyncio.wait_for(_answer(reader, request_id), timeout=timeout)
+            request_id += 1
+            match status:
+                case {"error": _}:
+                    return False
+                case {"result": {"thread": {"status": {"type": str(kind)}}}}:
+                    pass
+                case _:
+                    return False
+            if kind == "idle":
+                break
+            if kind != "active":
+                return False
+            await asyncio.sleep(interval)
+            interval = min(interval * 2, MAX_POLL_SECONDS)
+        if not unread():
+            return False
+
+        writer.write(_frame(json.dumps(_queue(request_id, thread, text))))
+        await asyncio.wait_for(writer.drain(), timeout=timeout)
+        knocked = await asyncio.wait_for(_answer(reader, request_id), timeout=timeout)
+        request_id += 1
 
         # An older app-server does not know the queue at all. Its answer names the method it could not parse,
         # which is the only thing separating "too old" from "no such thread" -- both arrive as -32600.
-        if knocked is not None and "thread/queue/add" in str(knocked.get("error", "")):
+        if knocked is not None and unread() and "thread/queue/add" in str(knocked.get("error", "")):
             logger.info("%s is too old for the queue; starting a turn in %s instead", endpoint, thread)
-            writer.write(_frame(json.dumps(_turn(3, thread, text))))
-            await writer.drain()
-            knocked = await asyncio.wait_for(_answer(reader, 3), timeout=timeout)
+            writer.write(_frame(json.dumps(_turn(request_id, thread, text))))
+            await asyncio.wait_for(writer.drain(), timeout=timeout)
+            knocked = await asyncio.wait_for(_answer(reader, request_id), timeout=timeout)
     except (OSError, TimeoutError, asyncio.IncompleteReadError) as exc:
         logger.info("could not wake %s through %s: %s", thread, endpoint, exc)
         return False
     finally:
-        with contextlib.suppress(OSError):
-            writer.close()
+        writer.close()
+        with contextlib.suppress(OSError, TimeoutError):
+            await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
 
     if knocked is None:
         return False

@@ -568,6 +568,8 @@ class Membership:
     def receive(self) -> list[dict[str, Any]]:
         """Take everything received since the last call, emptying the inbox."""
         collected, self.inbox = self.inbox, []
+        if collected:
+            self.backend._mail_read()
         return collected
 
     def pending_count(self) -> int:
@@ -610,6 +612,7 @@ class Backend:
         self.notices = Notices()
         self.notices.snapshot = self.describe_all
         self._waking: asyncio.Task | None = None
+        self._wake_notified = False
         self._serving: str | None = _UNASKED
         self._posting: asyncio.Task | None = None
         self._door: tuple[str, str] | None = _UNASKED
@@ -777,7 +780,10 @@ class Backend:
         """Close one membership and return it. Gives up the ROUTER when the last one goes."""
         membership = self.resolve(connection_id)
         del self.memberships[membership.routing_id]
+        had_mail = bool(membership.inbox)
         await membership.close()
+        if had_mail or not self.total_unread():
+            self._mail_read()
         logger.info("off air (%r on %r)", membership.name, membership.channel)
         self._release_if_idle()
         return membership
@@ -796,28 +802,45 @@ class Backend:
         hook or `check_inbox` hands the messages over. Codex leaves an app-server among this process's forebears
         and tells a hook its thread id. A session with neither reads its mail the next time it does something.
 
-        Coalescing needs no policy: a doorbell in flight is followed by another only for mail it did not name, and
-        one wake drains any number of messages, because reading is a pull.
+        Claude's doorbell names fresh mail. Codex has one pending alarm across all memberships, retained after
+        acceptance until mail is read. Reading rearms remaining mail; a busy thread waits instead of collecting
+        queued prompts for messages its hook may deliver first.
         """
         if self.door() is not None:
             if self._posting is None:
                 self._posting = self._spawn(self._ring_until_announced(), "yaac-doorbell")
             return
-        if (url := self.serving()) is None or self.notices.thread is None or self._waking is not None:
+        if (
+            (url := self.serving()) is None
+            or self.notices.thread is None
+            or self._waking is not None
+            or self._wake_notified
+        ):
             return
 
         async def rouse_once() -> None:
             try:
-                await wake.wake(
+                self._wake_notified = await wake.wake(
                     self.notices.thread,
                     f"[YAAC] Mail arrived on {membership.channel!r} for {membership.name!r}. "
                     f"Call check_inbox to read it. Nobody typed this: another session sent you a message.",
                     url=url,
+                    unread=lambda: self.total_unread() > 0,
                 )
             finally:
-                self._waking = None
+                if self._waking is asyncio.current_task():
+                    self._waking = None
 
         self._waking = self._spawn(rouse_once(), "yaac-wake")
+
+    def _mail_read(self) -> None:
+        """Cancel a stale alarm and let remaining memberships wait for another idle opportunity."""
+        self._wake_notified = False
+        if self._waking is not None:
+            self._waking.cancel()
+            self._waking = None
+        if waiting := next((m for m in self.memberships.values() if m.inbox), None):
+            self.rouse(waiting)
 
     def serving(self) -> str | None:
         """The app-server running this session, looked up once. Ancestry does not change under a live process."""
@@ -971,6 +994,8 @@ class Backend:
 
         LINGER is 0 on every socket this class makes, so the argument here only covers a socket made elsewhere.
         """
+        for task in list(self._tasks):
+            task.cancel()
         self.ctx.destroy(linger=0)
 
 
