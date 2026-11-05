@@ -30,6 +30,9 @@ nothing, and is never woken.
 
 It names no `model`, `cwd` or `approvalPolicy`: the call requires only the thread and the input, so Codex answers
 those from the thread's own configuration rather than from our guess about it.
+
+The same door keeps a joined session alive. A thread nobody is subscribed to is unloaded once idle long enough,
+and this process with it, so `hold` stays subscribed from the first join to the last leave.
 """
 
 import asyncio
@@ -113,32 +116,52 @@ def _listened(command: str) -> str | None:
     return None
 
 
-def _frame(text: str) -> bytes:
-    """One masked text frame. Clients must mask; servers must not, which is the only asymmetry in the framing."""
-    payload = text.encode("utf-8")
+def _frame(data: str | bytes, opcode: int = 0x1) -> bytes:
+    """One masked frame, text unless told otherwise. Clients must mask; servers must not, which is the only
+    asymmetry in the framing."""
+    payload = data.encode("utf-8") if isinstance(data, str) else data
     mask = os.urandom(4)
     masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
+    first = 0x80 | opcode
     if len(payload) < 126:
-        header = bytes([0x81, 0x80 | len(payload)])
+        header = bytes([first, 0x80 | len(payload)])
     elif len(payload) <= 0xFFFF:
-        header = bytes([0x81, 0xFE]) + struct.pack(">H", len(payload))
+        header = bytes([first, 0xFE]) + struct.pack(">H", len(payload))
     else:
-        header = bytes([0x81, 0xFF]) + struct.pack(">Q", len(payload))
+        header = bytes([first, 0xFF]) + struct.pack(">Q", len(payload))
     return header + mask + masked
 
 
-async def _read_frame(reader: asyncio.StreamReader) -> str:
-    """One text frame from the server. Unmasked, since that is what a server sends."""
-    head = await reader.readexactly(2)
-    length = head[1] & 0x7F
-    if length == 126:
-        length = struct.unpack(">H", await reader.readexactly(2))[0]
-    elif length == 127:
-        length = struct.unpack(">Q", await reader.readexactly(8))[0]
-    return (await reader.readexactly(length)).decode("utf-8", errors="replace") if length else ""
+async def _read_message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> str:
+    """The next text message from the server, or "" once it closes.
+
+    A connection that lives for a turn could read one frame and stop; a held one lives for days, so it answers
+    pings, reassembles a message the server split across frames, and takes a close frame for the end it is.
+    """
+    parts: list[bytes] = []
+    while True:
+        head = await reader.readexactly(2)
+        final, opcode, length = head[0] & 0x80, head[0] & 0x0F, head[1] & 0x7F
+        if length == 126:
+            length = struct.unpack(">H", await reader.readexactly(2))[0]
+        elif length == 127:
+            length = struct.unpack(">Q", await reader.readexactly(8))[0]
+        payload = await reader.readexactly(length) if length else b""
+        match opcode:
+            case 0x8:
+                return ""
+            case 0x9:
+                writer.write(_frame(payload, opcode=0xA))
+                continue
+            case 0x0 | 0x1:
+                parts.append(payload)
+            case _:
+                continue
+        if final:
+            return b"".join(parts).decode("utf-8", errors="replace")
 
 
-async def _answer(reader: asyncio.StreamReader, request_id: int) -> dict[str, Any] | None:
+async def _answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, request_id: int) -> dict[str, Any] | None:
     """The reply to one request, read past whatever else arrives first.
 
     The app-server talks while it works -- `thread/started`, `remoteControl/status/changed`, tool progress -- and
@@ -146,7 +169,7 @@ async def _answer(reader: asyncio.StreamReader, request_id: int) -> dict[str, An
     the whole of the bookkeeping.
     """
     while True:
-        raw = await _read_frame(reader)
+        raw = await _read_message(reader, writer)
         if not raw:
             return None
         try:
@@ -155,6 +178,63 @@ async def _answer(reader: asyncio.StreamReader, request_id: int) -> dict[str, An
             continue
         if message.get("id") == request_id:
             return message
+
+
+async def _request(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, message: dict[str, Any], timeout: float
+) -> dict[str, Any] | None:
+    writer.write(_frame(json.dumps(message)))
+    await asyncio.wait_for(writer.drain(), timeout=timeout)
+    return await asyncio.wait_for(_answer(reader, writer, message["id"]), timeout=timeout)
+
+
+async def _open(endpoint: str, timeout: float) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+    """A WebSocket to the app-server at `endpoint`, past `initialize`. None, logged, when it would not have us.
+
+    Raises OSError, TimeoutError or IncompleteReadError for a connection that fails partway; the caller owns the
+    writer only once this returns it.
+    """
+    parsed = urlparse(endpoint)
+    host, port = parsed.hostname or "127.0.0.1", parsed.port or 80
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+    try:
+        writer.write(
+            f"GET {parsed.path or '/'} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+            f"Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {HANDSHAKE_KEY}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode()
+        )
+        await asyncio.wait_for(writer.drain(), timeout=timeout)
+        handshake = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
+        if b"101" not in handshake.split(b"\r\n")[0]:
+            logger.info("%s did not accept a websocket: %s", endpoint, handshake.split(b"\r\n")[0])
+        else:
+            # The app-server wants to know who it is talking to before it will do anything.
+            identified = await _request(reader, writer, _initialize(), timeout)
+            if identified is not None and "result" in identified:
+                return reader, writer
+    except BaseException:
+        await _close(writer, timeout)
+        raise
+    await _close(writer, timeout)
+    return None
+
+
+async def _close(writer: asyncio.StreamWriter, timeout: float) -> None:
+    writer.close()
+    with contextlib.suppress(OSError, TimeoutError):
+        await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
+
+
+def _initialize() -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": {"name": "yaac", "title": "YAAC", "version": "0"},
+            "capabilities": {"experimentalApi": True},
+        },
+    }
 
 
 def _queue(request_id: int, thread: str, text: str) -> dict[str, Any]:
@@ -200,66 +280,25 @@ async def wake(
     """
     if (endpoint := url or serving()) is None:
         return False
-    parsed = urlparse(endpoint)
-    host, port = parsed.hostname or "127.0.0.1", parsed.port or 80
-
     try:
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
-    except (OSError, TimeoutError) as exc:
+        if (opened := await _open(endpoint, timeout)) is None:
+            return False
+    except (OSError, TimeoutError, asyncio.IncompleteReadError) as exc:
         logger.info("nothing listening at %s to wake %s: %s", endpoint, thread, exc)
         return False
+    reader, writer = opened
 
     try:
-        writer.write(
-            f"GET {parsed.path or '/'} HTTP/1.1\r\nHost: {host}:{port}\r\n"
-            f"Upgrade: websocket\r\nConnection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {HANDSHAKE_KEY}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode()
-        )
-        await asyncio.wait_for(writer.drain(), timeout=timeout)
-        handshake = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
-        if b"101" not in handshake.split(b"\r\n")[0]:
-            logger.info("%s did not accept a websocket: %s", endpoint, handshake.split(b"\r\n")[0])
-            return False
-
-        # The app-server wants to know who it is talking to before it will do anything.
-        writer.write(
-            _frame(
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "initialize",
-                        "params": {
-                            "clientInfo": {"name": "yaac", "title": "YAAC", "version": "0"},
-                            "capabilities": {"experimentalApi": True},
-                        },
-                    }
-                )
-            )
-        )
-        await asyncio.wait_for(writer.drain(), timeout=timeout)
-
-        identified = await asyncio.wait_for(_answer(reader, 1), timeout=timeout)
-        if identified is None or "error" in identified or "result" not in identified:
-            return False
-
         interval = POLL_SECONDS
         request_id = 2
         while unread():
-            writer.write(
-                _frame(
-                    json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "method": "thread/read",
-                            "params": {"threadId": thread, "includeTurns": False},
-                        }
-                    )
-                )
-            )
-            await asyncio.wait_for(writer.drain(), timeout=timeout)
-            status = await asyncio.wait_for(_answer(reader, request_id), timeout=timeout)
+            read = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "thread/read",
+                "params": {"threadId": thread, "includeTurns": False},
+            }
+            status = await _request(reader, writer, read, timeout)
             request_id += 1
             match status:
                 case {"error": _}:
@@ -277,25 +316,19 @@ async def wake(
         if not unread():
             return False
 
-        writer.write(_frame(json.dumps(_queue(request_id, thread, text))))
-        await asyncio.wait_for(writer.drain(), timeout=timeout)
-        knocked = await asyncio.wait_for(_answer(reader, request_id), timeout=timeout)
+        knocked = await _request(reader, writer, _queue(request_id, thread, text), timeout)
         request_id += 1
 
         # An older app-server does not know the queue at all. Its answer names the method it could not parse,
         # which is the only thing separating "too old" from "no such thread" -- both arrive as -32600.
         if knocked is not None and unread() and "thread/queue/add" in str(knocked.get("error", "")):
             logger.info("%s is too old for the queue; starting a turn in %s instead", endpoint, thread)
-            writer.write(_frame(json.dumps(_turn(request_id, thread, text))))
-            await asyncio.wait_for(writer.drain(), timeout=timeout)
-            knocked = await asyncio.wait_for(_answer(reader, request_id), timeout=timeout)
+            knocked = await _request(reader, writer, _turn(request_id, thread, text), timeout)
     except (OSError, TimeoutError, asyncio.IncompleteReadError) as exc:
         logger.info("could not wake %s through %s: %s", thread, endpoint, exc)
         return False
     finally:
-        writer.close()
-        with contextlib.suppress(OSError, TimeoutError):
-            await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
+        await _close(writer, timeout)
 
     if knocked is None:
         return False
@@ -303,3 +336,48 @@ async def wake(
         logger.info("the app-server refused to wake %s: %s", thread, error)
         return False
     return "result" in knocked
+
+
+HOLD_RETRY_SECONDS = 1.0
+MAX_HOLD_RETRY_SECONDS = 60.0
+
+
+async def hold(thread: str, url: str, timeout: float = TIMEOUT_SECONDS) -> None:
+    """Keep `thread` loaded for as long as this coroutine runs; cancel it to let go.
+
+    Codex shuts a loaded thread down once it has had no subscribed connection and no activity for
+    `thread_unload_delay_secs` -- 1800 s unless configured -- and its MCP servers go with it, so a joined session
+    drops off the air with nothing said. `thread/resume` subscribes the connection that sends it, and a closed
+    connection unsubscribes, so holding is a connection kept open and read: every event of the thread arrives on
+    it, and a reader that stopped would leave the app-server writing into a full buffer.
+
+    A dropped connection is reopened, backing off to a minute; a refusal ends the hold, since asking again gets
+    the same answer. The app-server restarting is not a case to handle -- this process is its child and goes too.
+    """
+    retry = HOLD_RETRY_SECONDS
+    while True:
+        try:
+            if (opened := await _open(url, timeout)) is not None:
+                reader, writer = opened
+                try:
+                    resume = {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "thread/resume",
+                        "params": {"threadId": thread, "excludeTurns": True},
+                    }
+                    match await _request(reader, writer, resume, timeout):
+                        case {"result": _}:
+                            logger.info("holding %s loaded through %s", thread, url)
+                            retry = HOLD_RETRY_SECONDS
+                            while await _read_message(reader, writer):
+                                pass
+                        case {"error": error}:
+                            logger.info("the app-server would not hold %s: %s", thread, error)
+                            return
+                finally:
+                    await _close(writer, timeout)
+        except (OSError, TimeoutError, asyncio.IncompleteReadError) as exc:
+            logger.info("lost the hold on %s through %s: %s", thread, url, exc)
+        await asyncio.sleep(retry)
+        retry = min(retry * 2, MAX_HOLD_RETRY_SECONDS)

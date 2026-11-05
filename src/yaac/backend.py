@@ -611,6 +611,9 @@ class Backend:
         self.notices.snapshot = self.describe_all
         self._waking: asyncio.Task | None = None
         self._wake_notified = False
+        # A Codex thread unloads after it has gone unwatched and idle for a while, taking this process with it.
+        # Held from the first join to the last leave, which is what being on the air means.
+        self._holding: asyncio.Task | None = None
         self._serving: str | None = _UNASKED
         self._posting: asyncio.Task | None = None
         self._door: tuple[str, str] | None = _UNASKED
@@ -763,6 +766,7 @@ class Backend:
             raise
 
         self.memberships[membership.routing_id] = membership
+        self._hold()
         logger.info("on air as %r on %r (%s)", name, channel, "hat" if self.is_wearing_hat else "participant")
         return Connection(
             connection_id=membership.routing_id,
@@ -830,6 +834,14 @@ class Backend:
                     self._waking = None
 
         self._waking = self._spawn(rouse_once(), "yaac-wake")
+
+    def _hold(self) -> None:
+        """Keep this session's Codex thread loaded while it is on the air. `_release_if_idle` lets go."""
+        if self._holding is not None and not self._holding.done():
+            return
+        if (url := self.serving()) is None or self.notices.thread is None:
+            return
+        self._holding = self._spawn(wake.hold(self.notices.thread, url), "yaac-hold")
 
     def _mail_read(self) -> None:
         """Cancel a stale alarm and let remaining memberships wait for another idle opportunity."""
@@ -972,6 +984,8 @@ class Backend:
         # Spawned rather than awaited: this runs from synchronous paths, and a closing listener has nobody waiting.
         if self.notices.port is not None:
             asyncio.ensure_future(self.notices.stop())
+        # Cancelling the hold closes its connection, which is what unsubscribes it; Codex unloads as usual after.
+        self._holding = None
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()

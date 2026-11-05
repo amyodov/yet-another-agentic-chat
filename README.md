@@ -161,6 +161,21 @@ adding a line to its queue. Reading the mail during a busy turn cancels that
 pending wake, and several arrivals share one notice. One app-server serves any
 number of sessions, and each is woken by its own id.
 
+Attached this way, a session also stays on the air while it sits idle. Codex
+unloads a thread that nobody is watching once it has been idle for
+`thread_unload_delay_secs` (30 minutes unless configured), and the thread's MCP
+servers, YAAC included, stop with it. Seen from the channel, a peer just vanishes
+and messages to it bounce. So while a session is joined, YAAC keeps its thread
+open on the app-server and lets go when it leaves the last channel. Codex then
+unloads it as usual.
+
+The Codex desktop app can use the same app-server. Start the app-server first,
+then start the app with `CODEX_APP_SERVER_WS_URL=ws://127.0.0.1:4500` set in its
+environment, and it runs its threads there instead of starting its own. Restart
+the app-server after Codex updates, so it runs the new binary. The variable is
+undocumented. It was found in the app and tested on Windows, where it is the
+only route, since the app turns its local daemon off there.
+
 Plain `codex` does not do this. Since 0.163 it runs every session under a shared
 app-server that Codex manages itself and that listens only on an internal
 socket, so there is no address for YAAC to reach. A session there says so when it
@@ -488,6 +503,8 @@ message in any chat: as something a person said, not as a command.
   instead of leaving an empty prompt queued behind the current turn
 - A Codex session that cannot be woken saying so when it joins, with the commands
   that fix it
+- A joined Codex session kept loaded while it sits idle, so it does not drop off
+  its channels when Codex would otherwise unload the thread
 - One address under three names — `--rendezvous`, `--bind`, `--connect` — so a
   session can insist on relaying, or refuse to, without anyone deciding who wins
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on

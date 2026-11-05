@@ -50,6 +50,8 @@ class FakeAppServer:
         self.status_delay = 0.0
         self.queue_ack = asyncio.Event()
         self.queue_ack.set()
+        self.refused: set[str] = set()
+        self.pongs: list[bytes] = []
         self.connections = set()
         self.server: asyncio.Server | None = None
 
@@ -93,7 +95,11 @@ class FakeAppServer:
             self._send(writer, {"method": "remoteControl/status/changed", "params": {"status": "disabled"}})
         with contextlib.suppress(asyncio.IncompleteReadError, ConnectionError):
             while True:
-                message = json.loads(await self._read(reader))
+                opcode, payload = await self._read(reader)
+                if opcode == 0xA:
+                    self.pongs.append(payload)
+                    continue
+                message = json.loads(payload)
                 self.requests.append(message)
                 if self.chatty:
                     self._send(writer, {"method": "thread/started", "params": {}})
@@ -102,6 +108,8 @@ class FakeAppServer:
                 elif message["method"] == "thread/queue/add":
                     await self.queue_ack.wait()
                 match message["method"]:
+                    case method if method in self.refused:
+                        self._send(writer, {"id": message["id"], "error": {"code": -32600, "message": "refused"}})
                     case "thread/read" if self.status_error:
                         self._send(writer, {"id": message["id"], "error": {"code": -32600}})
                     case "thread/read":
@@ -127,8 +135,16 @@ class FakeAppServer:
             header = bytes([0x81, 126]) + struct.pack(">H", len(payload))
         writer.write(header + payload)
 
+    def ping(self, payload: bytes) -> None:
+        for writer in self.connections:
+            writer.write(bytes([0x89, len(payload)]) + payload)
+
+    def drop(self) -> None:
+        for writer in list(self.connections):
+            writer.close()
+
     @staticmethod
-    async def _read(reader: asyncio.StreamReader) -> str:
+    async def _read(reader: asyncio.StreamReader) -> tuple[int, bytes]:
         """A client's frame, which is masked -- unmasking it here is what proves the client masked it."""
         head = await reader.readexactly(2)
         assert head[1] & 0x80, "a client must mask every frame it sends"
@@ -137,7 +153,7 @@ class FakeAppServer:
             length = struct.unpack(">H", await reader.readexactly(2))[0]
         mask = await reader.readexactly(4)
         payload = await reader.readexactly(length)
-        return bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload)).decode()
+        return head[0] & 0x0F, bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
 
 
 @pytest.fixture
@@ -581,3 +597,82 @@ async def test_empty_read_and_disconnect_leave_accepted_wake_coalesced(waking_ba
     arrive(waking_backend, first)
     await asyncio.sleep(0.04)
     assert len(queues(app_server)) == 1
+
+
+async def until(condition):
+    async with asyncio.timeout(2):
+        while not condition():
+            await asyncio.sleep(0.005)
+
+
+@pytest.fixture
+async def holding_backend(endpoint, monkeypatch, app_server):
+    """A Codex session as `join_channel` leaves it: the thread is known before the first `hello`."""
+    monkeypatch.setattr(wake, "HOLD_RETRY_SECONDS", 0.01)
+    backend = Backend(endpoint)
+    monkeypatch.setattr(backend, "door", lambda: None)
+    monkeypatch.setattr(backend, "serving", lambda: app_server.url)
+    backend.notices.thread = "01THREAD"
+    yield backend
+    await backend.disconnect_all()
+    backend.close()
+    await asyncio.sleep(0)
+
+
+def resumes(server):
+    return [r["params"] for r in server.requests if r["method"] == "thread/resume"]
+
+
+@pytest.mark.parametrize("names", [["ann"], ["ann", "bob"]])
+async def test_a_joined_session_holds_its_thread_until_it_leaves(holding_backend, app_server, names):
+    for name in names:
+        await holding_backend.connect(FORUM, name)
+    await until(lambda: resumes(app_server))
+    await asyncio.sleep(SETTLE)
+    # One subscription for the whole process, however many memberships it holds, and it stays open.
+    assert (resumes(app_server), len(app_server.connections)) == ([{"threadId": "01THREAD", "excludeTurns": True}], 1)
+
+    await holding_backend.disconnect_all()
+    await until(lambda: not app_server.connections)
+    await holding_backend.connect(FORUM, "ann")
+    await until(lambda: len(resumes(app_server)) == 2)
+
+
+async def test_a_held_connection_answers_pings_and_comes_back_after_a_drop(holding_backend, app_server):
+    await holding_backend.connect(FORUM, "ann")
+    await until(lambda: resumes(app_server))
+    app_server.ping(b"are you there")
+    await until(lambda: app_server.pongs)
+    app_server.drop()
+    await until(lambda: len(resumes(app_server)) == 2)
+    assert app_server.pongs == [b"are you there"]
+
+
+async def test_a_refused_hold_is_not_asked_again(holding_backend, app_server):
+    app_server.refused.add("thread/resume")
+    await holding_backend.connect(FORUM, "ann")
+    await until(lambda: resumes(app_server))
+    await asyncio.sleep(SETTLE)
+    assert (len(resumes(app_server)), len(app_server.connections)) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    ("frames", "expected"),
+    [
+        ([(0x81, b'{"a":1}')], '{"a":1}'),
+        # Split across a text frame and a continuation, with a ping between them, which a server may interleave.
+        ([(0x01, b'{"a":'), (0x89, b"p"), (0x80, b"1}")], '{"a":1}'),
+        ([(0x88, b"")], ""),
+    ],
+)
+async def test_a_message_is_read_whole_whatever_framing_carries_it(frames, expected):
+    reader = asyncio.StreamReader()
+    for first, payload in frames:
+        reader.feed_data(bytes([first, len(payload)]) + payload)
+    written = []
+
+    class Writer:
+        def write(self, data):
+            written.append(data)
+
+    assert await wake._read_message(reader, Writer()) == expected

@@ -36,7 +36,7 @@ src/yaac/
   notices.py    each session's own WebSocket: what a watcher streams and a hook asks
   directory.py  the client side of `sessions` — who is running here, asked at the rendezvous point
   hook.py       `yaac-hook`, the program Codex runs because its hooks cannot call a tool
-  wake.py       starting a turn in an idle Codex session through its app-server
+  wake.py       starting a turn in an idle Codex session through its app-server, and keeping its thread loaded
   messaging_socket.py  delivering into the Claude Code session that started us, through the inbox socket it exports
   processes.py  the process tree: ancestry, and command lines, on all three OSes
   chat.py       the terminal client's entry point; imports textual only once it knows it is there
@@ -267,6 +267,30 @@ active. Queueing one prompt per arrival on a busy thread leaves prompts waiting 
 `check_inbox` have already read their mail. Wake scheduling therefore needs process-level coalescing and an
 unread check after waiting for idle. The start-of-turn lag and the race between checking status and queueing
 can still permit an occasional empty wake; this API does not offer atomic enqueue-only-if-idle semantics.
+
+**Codex unloads a thread nobody is subscribed to, and a subscription is a connection held open.** Reported from
+the field on Windows in November 2026 -- joined Codex threads dropping off their channels after a while idle --
+and measured here on 2026-11-05 with `codex-cli 0.166.0`, against isolated app-servers started with
+`-c thread_unload_delay_secs=60`, which takes effect. A thread with no subscribed connection unloaded 60-70 s
+after its last activity. `thread/status/changed` to `notLoaded` and `thread/closed` were sent to every connection,
+subscribed or not, and the thread's MCP server processes exited, YAAC's included. The default delay is 1800 s.
+
+`thread/resume {threadId, excludeTurns: true}` subscribes the connection that sends it, including on a thread that
+is already loaded. There it returned 2.4 KB and left the thread's MCP server processes running, with the same PIDs.
+`thread/unsubscribe` answers `{"status": "unsubscribed"}`, and so does closing the connection. A connection held
+this way for 420 s kept the thread loaded, and the thread unloaded about 70 s after the connection let go. Over that
+time the app-server sent no WebSocket pings and split no message across frames. The held connection receives the
+thread's whole event stream: one short turn was 265 frames and 73 KB, nearly all `item/agentMessage/delta`.
+A thread with no turns has nothing on disk to resume, and once unloaded its `thread/resume` is refused.
+
+End to end, with YAAC from the working tree as the thread's MCP server: the model joined a channel, every other
+client disconnected, and the thread stayed loaded past three delays. After `leave_channel` it unloaded 70 s later.
+`Backend` therefore holds the thread from the first join to the last leave (`wake.hold`). The client still answers
+pings and reassembles fragments, since a held connection lives for days and nothing promises it never sees either.
+
+Also from the field, not measured here: the Codex desktop app runs its threads on an existing app-server when
+`CODEX_APP_SERVER_WS_URL` names it, a variable read in the app's own code and documented nowhere. On Windows that
+is the only route, because the app turns its local-daemon mode off there.
 
 **Codex's app-server has two doors into a session, and the queue is the better one.** Measured against
 codex-cli 0.151.0 on 2026-08-29, over `codex app-server --listen ws://127.0.0.1:4599`. `thread/queue/add` takes

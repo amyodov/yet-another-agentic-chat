@@ -165,7 +165,8 @@ STRANDED = (
     "for YAAC to reach, so mail that arrives while you wait stays unread until your user types. To fix it, tell "
     "your user: run `codex app-server --listen ws://127.0.0.1:4500` once per machine and leave it running, start "
     "Codex sessions with `codex --remote ws://127.0.0.1:4500` (or `codex resume --remote ws://127.0.0.1:4500`), "
-    "keep YAAC's Codex hooks file, then rejoin."
+    "keep YAAC's Codex hooks file, then rejoin. Until then Codex may also unload this thread after it has been idle "
+    "for a while, which takes you off the air; rejoin when you are back."
 )
 """Said in join_channel's result and dev_connections when `Backend.stranded()`. Measured on codex-cli 0.163."""
 
