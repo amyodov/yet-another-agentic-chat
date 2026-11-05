@@ -171,6 +171,21 @@ STRANDED = (
 """Said in join_channel's result and dev_connections when `Backend.stranded()`. Measured on codex-cli 0.163."""
 
 
+def _hooks_warning(trouble: str) -> str:
+    """Said when the app-server reports that this Codex session's YAAC hooks will not run.
+
+    Both fixes are named because nothing here tells the desktop app from the terminal: threads started in the
+    terminal report `source: "vscode"`. The app approves hooks in a dialog of its own and has no `/hooks`.
+    """
+    return (
+        f"YAAC's Codex hooks will not run in this session ({trouble}), so mail that arrives during a turn is not "
+        "shown to you. Until it is fixed, call check_inbox before acting on anything and before ending your turn. "
+        "Tell your user: approve or enable YAAC's hooks with `/hooks` in the Codex terminal, or in the hooks "
+        "approval dialog of the Codex app; if they are missing, add the hooks file from YAAC's README to "
+        "~/.codex/hooks.json; a project's own .codex/hooks.json runs only once the project is trusted."
+    )
+
+
 def _refused(exc: Exception) -> dict[str, Any]:
     """Turn a backend exception into a result the model can act on rather than a protocol error.
 
@@ -314,6 +329,8 @@ async def join_channel(
         )
     if radio().stranded():
         response["wake"] = STRANDED
+    elif trouble := await radio().hook_trouble():
+        response["hooks"] = _hooks_warning(trouble)
     if not radio().delivers and (watch := radio().notices.url):
         # Only Claude Code can act on this today, through its Monitor tool; every other client ignores an extra
         # field. It is the one path that reaches a session doing nothing at all, since a hook needs the session to
@@ -503,6 +520,8 @@ async def dev_connections() -> dict[str, Any]:
     answer: dict[str, Any] = {"connections": open_connections, "count": len(open_connections)}
     if _radio and _radio.stranded():
         answer["wake"] = STRANDED
+    elif _radio and (trouble := await _radio.hook_trouble()):
+        answer["hooks"] = _hooks_warning(trouble)
     if _radio and (watch := _radio.notices.url):
         # `join_channel` says this once, and only to whoever called it. A program written in another language --
         # a supervisor, a watcher, anything not holding this session's tool results -- has no way back to it, and

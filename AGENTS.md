@@ -288,6 +288,24 @@ client disconnected, and the thread stayed loaded past three delays. After `leav
 `Backend` therefore holds the thread from the first join to the last leave (`wake.hold`). The client still answers
 pings and reassembles fragments, since a held connection lives for days and nothing promises it never sees either.
 
+**A queued prompt can be taken back, and a thread reports its own hooks.** Measured on 2026-11-05 with
+`codex-cli 0.166.0`. `thread/queue/add` answers `{queuedSubmission: {id, input, clientUserMessageId}}`;
+`thread/queue/delete {threadId, queuedSubmissionId}` answers `{"deleted": true}` while the prompt still waits behind
+a busy turn, and `{"deleted": false}` once it has drained -- an idle thread drains it within 0.3 s -- or when asked
+twice. Both are experimental, listed only by `generate-json-schema --experimental`, like `thread/queue/add`.
+`thread/resume`'s answer carries `thread.status`, so a line knows the status from the moment it connects.
+
+`hooks/list {threadId}` answers `{data: [{cwd, hooks, warnings, errors}]}`, one entry per hook with `eventName`
+(`preToolUse`, `stop`), `command` or `server`/`tool`, `enabled` and `trustStatus`. Measured in an isolated
+`CODEX_HOME`: an unapproved user hooks file reports `untrusted`; a recorded `hooks.state.<key>.trusted_hash` that
+does not match reports `modified`; `enabled = false` there reports `enabled: false` with `trusted`. A project's
+`.codex/hooks.json` in an untrusted project is not listed at all, with no warning in the answer. A thread's
+`source` cannot tell the desktop app from the terminal: threads started from the terminal report `"vscode"`.
+
+End to end, with YAAC from the working tree: an idle thread that had joined a channel was woken by a peer's
+message through the line's status notifications, its turn read the mail with `check_inbox`, and the withdraw
+that followed answered `deleted: false`, since the prompt had already run.
+
 Also from the field, not measured here: the Codex desktop app runs its threads on an existing app-server when
 `CODEX_APP_SERVER_WS_URL` names it, a variable read in the app's own code and documented nowhere. On Windows that
 is the only route, because the app turns its local-daemon mode off there.

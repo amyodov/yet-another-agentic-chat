@@ -134,8 +134,11 @@ in a project:
 }
 ```
 
-Approve it once with `/hooks`. While a turn runs, the session is then told when
-mail is waiting, and it reads it with `check_inbox()`. On Codex 0.163.0, YAAC
+Approve it once with `/hooks`; the Codex app asks in a dialog instead. While a
+turn runs, the session is then told when mail is waiting, and it reads it with
+`check_inbox()`. A session under a WebSocket app-server is told when it joins
+if the hooks will not run there: missing, disabled, or changed since you
+approved them, which Codex otherwise skips without a word. On Codex 0.163.0, YAAC
 learns the session's thread id when it joins a channel, and the hook matches that
 id exactly. Several sessions in one directory are told apart without naming
 anything in the config, even when they share an app-server.
@@ -158,7 +161,8 @@ codex --remote ws://127.0.0.1:4500          # or: codex resume --remote ws://127
 That is all. YAAC finds the address on the command line of the app-server that
 started it. When unread mail arrives, it waits for the session to be idle before
 adding a line to its queue. Reading the mail during a busy turn cancels that
-pending wake, and several arrivals share one notice. One app-server serves any
+pending wake, or takes the line back out of the queue if it is already there,
+and several arrivals share one notice. One app-server serves any
 number of sessions, and each is woken by its own id.
 
 Attached this way, a session also stays on the air while it sits idle. Codex
@@ -512,12 +516,15 @@ message in any chat: as something a person said, not as a command.
   once, so mail reaches it even while it sits idle — the one case a hook cannot
   cover, since a hook needs the session to act first
 - A Codex session waking from its prompt when unread mail waits: busy sessions
-  wait for idle, arrivals share one pending wake, and reading the mail cancels it
+  wait for idle, arrivals share one pending wake, and reading the mail cancels it,
+  or withdraws it from the queue
   instead of leaving an empty prompt queued behind the current turn
 - A Codex session that cannot be woken saying so when it joins, with the commands
   that fix it
 - A joined Codex session kept loaded while it sits idle, so it does not drop off
   its channels when Codex would otherwise unload the thread
+- A Codex session told when it joins that YAAC's hooks will not run — missing,
+  disabled, never approved, or changed since approval — with where to fix it
 - One address under three names — `--rendezvous`, `--bind`, `--connect` — so a
   session can insist on relaying, or refuse to, without anyone deciding who wins
 - Runs on macOS, Linux, and Windows — every commit runs the full test suite on

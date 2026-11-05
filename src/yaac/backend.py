@@ -78,6 +78,9 @@ LOOPBACK = ("127.0.0.1", "::1", "localhost", "[::1]")
 BIND_RETRY_SECONDS = 2.0
 HELLO_TIMEOUT_SECONDS = 5.0
 PROBE_TIMEOUT_SECONDS = 10.0
+HOOK_CHECK_SECONDS = 3.0
+"""How long `join_channel` waits for the app-server line before giving up on checking the hooks. A resume is
+answered in milliseconds; a line that has not connected in this long is not worth holding a tool call for."""
 SEND_HIGH_WATER_MARK = 1000
 """Outbound queue limit. Once reached, `send` raises `zmq.Again` instead of blocking or buffering without bound."""
 
@@ -611,9 +614,9 @@ class Backend:
         self.notices.snapshot = self.describe_all
         self._waking: asyncio.Task | None = None
         self._wake_notified = False
-        # A Codex thread unloads after it has gone unwatched and idle for a while, taking this process with it.
-        # Held from the first join to the last leave, which is what being on the air means.
-        self._holding: asyncio.Task | None = None
+        # The connection to this Codex session's app-server, held from the first join to the last leave: it keeps
+        # the thread loaded, says when it is idle, and is what a wake knocks on.
+        self._line: wake.Line | None = None
         self._serving: str | None = _UNASKED
         self._posting: asyncio.Task | None = None
         self._door: tuple[str, str] | None = _UNASKED
@@ -812,21 +815,14 @@ class Backend:
             if self._posting is None:
                 self._posting = self._spawn(self._ring_until_announced(), "yaac-doorbell")
             return
-        if (
-            (url := self.serving()) is None
-            or self.notices.thread is None
-            or self._waking is not None
-            or self._wake_notified
-        ):
+        if (line := self._hold()) is None or self._waking is not None or self._wake_notified:
             return
 
         async def rouse_once() -> None:
             try:
-                self._wake_notified = await wake.wake(
-                    self.notices.thread,
+                self._wake_notified = await line.wake(
                     f"[YAAC] Mail arrived on {membership.channel!r} for {membership.name!r}. "
                     f"Call check_inbox to read it. Nobody typed this: another session sent you a message.",
-                    url=url,
                     unread=lambda: self.total_unread() > 0,
                 )
             finally:
@@ -835,16 +831,25 @@ class Backend:
 
         self._waking = self._spawn(rouse_once(), "yaac-wake")
 
-    def _hold(self) -> None:
-        """Keep this session's Codex thread loaded while it is on the air. `_release_if_idle` lets go."""
-        if self._holding is not None and not self._holding.done():
-            return
-        if (url := self.serving()) is None or self.notices.thread is None:
-            return
-        self._holding = self._spawn(wake.hold(self.notices.thread, url), "yaac-hold")
+    def _hold(self) -> wake.Line | None:
+        """The line to this session's app-server, opened while on the air; `_release_if_idle` ends it."""
+        if self._line is None and self.memberships and (url := self.serving()) and self.notices.thread:
+            self._line = wake.Line(self.notices.thread, url)
+            self._spawn(self._line.run(), "yaac-line")
+        return self._line
+
+    async def hook_trouble(self, wait: float = HOOK_CHECK_SECONDS) -> str | None:
+        """What stops this Codex session's YAAC hooks from running, if its app-server can say. None otherwise."""
+        return None if (line := self._hold()) is None else await line.hook_trouble(wait)
 
     def _mail_read(self) -> None:
-        """Cancel a stale alarm and let remaining memberships wait for another idle opportunity."""
+        """Cancel a stale alarm and let remaining memberships wait for another idle opportunity.
+
+        An alarm already queued behind a busy turn is taken back too, or it would run after the mail it announced
+        had been read and wake the session to an empty inbox.
+        """
+        if self._wake_notified and self._line is not None:
+            self._spawn(self._line.withdraw(), "yaac-withdraw")
         self._wake_notified = False
         if self._waking is not None:
             self._waking.cancel()
@@ -984,8 +989,8 @@ class Backend:
         # Spawned rather than awaited: this runs from synchronous paths, and a closing listener has nobody waiting.
         if self.notices.port is not None:
             asyncio.ensure_future(self.notices.stop())
-        # Cancelling the hold closes its connection, which is what unsubscribes it; Codex unloads as usual after.
-        self._holding = None
+        # Cancelling the line closes its connection, which is what unsubscribes it; Codex unloads as usual after.
+        self._line = None
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()
