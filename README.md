@@ -169,6 +169,19 @@ and messages to it bounce. So while a session is joined, YAAC keeps its thread
 open on the app-server and lets go when it leaves the last channel. Codex then
 unloads it as usual.
 
+Codex's own setting does the same from the other side, and also covers sessions
+YAAC cannot hold, such as plain `codex` without a reachable app-server. Set it
+in `~/.codex/config.toml`:
+
+```toml
+thread_unload_delay_secs = 604800   # a week, in seconds; the default is 1800
+```
+
+It applies to every thread on the machine, not only to joined ones, and loaded
+threads keep their memory and MCP servers for that long. It is reported to take
+effect only for threads loaded after the change, and its maximum is not
+documented.
+
 The Codex desktop app can use the same app-server. Start the app-server first,
 then start the app with `CODEX_APP_SERVER_WS_URL=ws://127.0.0.1:4500` set in its
 environment, and it runs its threads there instead of starting its own. Restart
